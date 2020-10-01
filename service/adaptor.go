@@ -1,10 +1,3 @@
-type Plugin interface {
-	Capacity() int
-	Active() int
-	Add(stream) error
-	Remove(stream) error
-}
-
 type Stream interface {
 	Subscribe() <- // get stream var updates
 	Publish(plugin, interface{}) -> // publish var update

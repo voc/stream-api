@@ -1,0 +1,16 @@
+syntax = "proto3";
+package storage;
+
+//option go_package = "bitbucket.fem.tu-ilmenau.de/scm/~ischluff/stream-api/proto";
+
+message State {
+    repeated Stream streams = 1;
+}
+
+message Stream {
+    string name = 1;
+    bool active = 2;
+    string application = 3;
+    string auth_key = 4;
+    int64 auth_expire = 5;
+}
