@@ -51,6 +51,8 @@ func (j *Job) parseSpeed(status map[string]string) {
 	log.Println("speed", fspeed)
 	if fspeed < 1 && j.lastSpeed > fspeed {
 		j.stallCount++
+	} else {
+		j.stallCount = 0
 	}
 	j.lastSpeed = fspeed
 }
@@ -86,7 +88,7 @@ func handleConnection(conn net.Conn, job *Job, overload <-chan Overload) {
 			return
 		}
 		job.parseSpeed(status)
-		if job.stallCount > 3 {
+		if job.stallCount > 5 {
 			log.Println("stall")
 			job.Stop()
 		}
