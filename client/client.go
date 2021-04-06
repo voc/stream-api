@@ -1,19 +1,20 @@
 package client
 
 import (
-	"log"
-	"time"
-	"fmt"
-	"strings"
 	"context"
-	"sort"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/coreos/etcd/mvcc/mvccpb"
+	"github.com/voc/stream-api/config"
 	"go.etcd.io/etcd/clientv3"
-	"bitbucket.fem.tu-ilmenau.de/scm/~ischluff/stream-api/config"
-	"bitbucket.fem.tu-ilmenau.de/scm/~ischluff/stream-api/service"
 )
 
-const requestTimeout := time.Second
+const requestTimeout = time.Second
 
 // sanitizeKey replaces reserved characters with underscores
 func sanitizeKey(key string) string {
@@ -22,12 +23,13 @@ func sanitizeKey(key string) string {
 
 // Client is a wrapper for a etcdv3 client
 type Client struct {
-	db *clientv3.Client
-	lease clientv3.LeaseID
-	name string
+	client *clientv3.Client
+	lease  clientv3.LeaseID
+	done   sync.WaitGroup
+	name   string
 }
 
-func NewClient(ctx context.Context, cfg config.Network) *Client {
+func NewClient(parentContext context.Context, cfg config.Network) *Client {
 	c, err := clientv3.New(clientv3.Config{
 		Endpoints: cfg.Endpoints,
 	})
@@ -36,226 +38,208 @@ func NewClient(ctx context.Context, cfg config.Network) *Client {
 	}
 
 	// minimum lease TTL is 5-second
-	resp, err := c.Grant(ctx, 5)
+	resp, err := c.Grant(parentContext, 5)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	var keepalive <-chan *clientv3.LeaseKeepAliveResponse
-	keepalive, err = c.KeepAlive(ctx, resp.ID)
+	keepalive, err = c.KeepAlive(parentContext, resp.ID)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	cli := &Client{
+		client: c,
+		lease:  resp.ID,
+		name:   cfg.Name,
 	}
 
 	// keepalive and revoke lease on exit
-	go func(){
+	cli.done.Add(1)
+	go func() {
+		defer cli.done.Done()
 		for {
 			select {
-			case <-ctx.Done():
-				ctx2, _ := context.WithTimeout(context.Background(), 300*time.Millisecond)
-				_, err = c.Revoke(ctx2, resp.ID)
+			case <-parentContext.Done():
+				ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+				defer cancel()
+				_, err = c.Revoke(ctx, resp.ID)
 				if err != nil {
 					log.Println(err)
 				}
-				c.Close()
-				log.Println("client close")
+				err := c.Close()
+				if err != nil {
+					log.Println("client close:", err.Error())
+				}
 				return
-			case res := <- keepalive:
-				// todo: renew lease if res == nil
-				log.Println("keepalive", res)
+			case <-keepalive:
+				// todo: renew lease if resp == nil
 			}
 		}
 	}()
 
-	return &Client{
-		client: c,
-		lease: resp.ID,
-		name: config.Name
-	}
+	return cli
 }
 
-func (client *Client) Publish(ctx context.Context, services []service.Service) {
-	for _, svc := range services {
-		// if its a source watch for updates
-		if source, ok := svc.(service.Source); ok {
-			watchSource(ctx, source)
-		}
-		watchService(ctx, svc)
-	}
+func (client *Client) Wait() {
+	client.done.Wait()
 }
 
-func (client *Client) watchSource(ctx context.Context, source service.Source) {
+type WatchAPI interface {
+	Watch(ctx context.Context, prefix string) (UpdateChan, error)
+}
+
+type PublishAPI interface {
+	PublishService(ctx context.Context, service string, data string) error
+	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (clientv3.LeaseID, error)
+	RefreshLease(ctx context.Context, id clientv3.LeaseID) error
+	RevokeLease(ctx context.Context, id clientv3.LeaseID) error
+}
+
+type PublisherAPI interface {
+	WatchAPI
+	PublishAPI
+}
+
+type TranscoderAPI interface {
+	WatchAPI
+	PublishAPI
+}
+
+// publishWithLease publishes a key with a new lease if the key doesn't exist yet
+func (client *Client) PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (clientv3.LeaseID, error) {
+	resp, err := client.client.Grant(ctx, int64(ttl/time.Second))
+	if err != nil {
+		return 0, err
+	}
+
+	res, err := client.client.Txn(ctx).
+		// txn value comparisons are lexical
+		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
+		// the "Then" runs, since "xyz" > "abc"
+		Then(clientv3.OpPut(key, value, clientv3.WithLease(resp.ID))).
+		Commit()
+
+	if err != nil {
+		return 0, err
+	}
+
+	if !res.Succeeded {
+		return 0, errors.New("already exists")
+	}
+
+	return resp.ID, nil
+}
+
+const (
+	UpdateTypeDelete = clientv3.EventTypeDelete
+	UpdateTypePut    = clientv3.EventTypePut
+)
+
+type WatchUpdate struct {
+	Type mvccpb.Event_EventType
+	KV   *mvccpb.KeyValue
+}
+
+type UpdateChan chan []*WatchUpdate
+
+// watch prefix and receive current state
+func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, error) {
+	log.Println("watch", prefix)
+	ctx2, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+
+	opts := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithProgressNotify()}
+	watchChan := client.client.Watch(ctx2, prefix, opts...)
+
+	// get current state
+	var updates []*WatchUpdate
+	resp, err := client.client.Get(clientv3.WithRequireLeader(ctx), prefix, clientv3.WithPrefix())
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	for _, item := range resp.Kvs {
+		updates = append(updates, &WatchUpdate{
+			Type: UpdateTypePut,
+			KV:   item,
+		})
+	}
+	lastRev := resp.Header.Revision
+	ch := make(UpdateChan)
+
 	go func() {
-		watch := source.WatchStreams(ctx)
+		defer cancel()
 		for {
+			// push update
+			if updates != nil {
+				select {
+				case <-ctx2.Done():
+					return
+				case ch <- updates:
+				}
+				updates = nil
+			}
+
+			// wait for data
 			select {
-			case <-ctx.Done:
+			case <-ctx2.Done():
 				return
-			case stream := <-watch:
-				publishStream(ctx, stream)
+			case change := <-watchChan:
+				err := change.Err()
+				if change.Canceled {
+					log.Println("watch chan closed", err.Error())
+					return
+				}
+				if err != nil {
+					log.Println("watch error", err.Error())
+					continue
+				}
+				if change.Header.Revision <= lastRev {
+					continue
+				}
+				for _, event := range change.Events {
+					updates = append(updates, &WatchUpdate{
+						Type: event.Type,
+						KV:   event.Kv,
+					})
+				}
+				lastRev = change.Header.Revision
 			}
 		}
-	}
+	}()
+	return ch, nil
 }
 
-func (client *Client) watchService(ctx context.Context, svc service.Service) {
-	watch := svc.WatchService(ctx)
-	
+func (client *Client) RefreshLease(ctx context.Context, id clientv3.LeaseID) error {
+	_, err := client.client.KeepAliveOnce(ctx, id)
+	return err
 }
 
-// publishStream publishes a new stream if the key doesn't exist yet
-func (client *Client) publishStream(ctx context.Context, stream service.Stream) {
-	_, err := client.db.Put(ctx, "stream:%s", stream.Vars(), clientv3.WithLease(client.lease))
-	if err != nil {
-		log.Fatal(err)
-	}
+func (client *Client) RevokeLease(ctx context.Context, id clientv3.LeaseID) error {
+	_, err := client.client.Revoke(ctx, id)
+	return err
 }
 
 // publishService publishes a service endpoint on the current host
-func (client *Client) publishService(svc service.Service) {
-	key := prefix := fmt.Sprintf("service:%s:%s", svc.Name(), client.Name)
-	_, err := client.db.Put(ctx, key, svc.Vars(), clientv3.WithLease(client.lease))
-	if err != nil {
-		log.Fatal(err)
-	}
+func (client *Client) PublishService(ctx context.Context, service string, data string) error {
+	key := fmt.Sprintf("service:%s:%s", service, client.name)
+	// TODO: implement as transaction to prevent double publish!
+	_, err := client.client.Put(ctx, key, data, clientv3.WithLease(client.lease))
+	return err
 }
 
 // GetServices fetches all service owners for a given service name
-func (client *Client) getServices(c context.Context, service string, rev int64) ([]Service, error) {
-	prefix := fmt.Sprintf("service:%s:", service)
-	ctx, cancel := context.WithTimeout(c, requestTimeout)
-	resp, err := client.db.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithRev(rev))
-	cancel()
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, ev := range resp.Kvs {
-		fmt.Printf("%s: %s\n", ev.Key, ev.Value)
-	}
-}
-
-// shouldClaim computes whether we should claim a slot for a certain service
-func (client *Client) shouldClaim(name string, ourhost string) bool {
-	services, err := client.db.getServices(name)
-	if err != nil {
-		log.Println(err)
-		return false
-	}
-
-	sort.Sort(service.ByLoad(services))
-
-	// Claim slot if we are part of the top 2 candidates
-	n = 2
-	if len(services < n) {
-		n = len(services)
-	}
-	max := max()
-	for _, s := range services[:n] {
-		if s.Host == ourhost {
-			return true
-		}
-	}
-	return false
-}
-
-// ClaimSlot tries to claim a stream slot for a local plugin
-func (client *Client) claimSlot(c context.Context, stream Stream, service string) (*Claim, error) {
-	key := fmt.Sprintf("stream:%s:claim:%s", sanitizeKey(stream.Name), sanitizeKey(service))
-
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-
-	_, err = kvc.Txn(ctx).
-		// Only claim slot if it wasn't claimed before
-		// TODO: check if this works, if not do Get first and compare Modversion in Txn
-		If(clientv3.Compare(clientv3.Value(key), "!=", "")).
-		// Claim for ourselves
-		Then(clientv3.OpPut(key, client.hostname, clientv3.WithLease(client.lease))).
-		Commit()
-	cancel()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, ev := range resp.Kvs {
-		fmt.Printf("%s: %s\n", ev.Key, ev.Value)
-	}
-
-	return &Claim{
-		client: client,
-		stream: Stream,
-		service: service
-	}, _
-}
-
-func (client *Client) Watch(ctx) {
-	watch := client.Watch("stream/")
-	go func(){
-		select {
-		case <-ctx.Done():
-			return
-			client.StopWatch(/*TODO*/)
-
-		case stream := <-watch:
-			slots := stream.OpenSlots()
-			for _, name := range slots {
-				plugin, found := reg.Lookup(name)
-				if !found {
-					continue
-				}
-
-				if !shouldClaim(name, config.Hostname) {
-					continue
-				}
-
-				// see if we should assign ourselves
-				// check local capacity
-				if plugin.Capacity() - plugin.Active() <= 0 {
-					log.Println("Full capacity reached")
-					continue
-				}
-
-				// try to assign ourselves
-				claim, err := client.claimSlot(stream, name)
-				if err != nil {
-					log.Println(err)
-					continue
-				}
-
-				if claim != nil {
-					service.NewPluginAdaptor(claim, config, plugin, stream)
-				}
-			}
-		}
-	}()
-}
-
-
-
-// Testing
-// func (client *Client) Watch(ctx context.Context) {
-// 	log.Println("watch")
-// 	rch := client.db.Watch(ctx, "stream:", clientv3.WithPrefix())
-// 	go func(){
-// 		for {
-// 			select {
-// 			case <-ctx.Done():
-// 				log.Println("watch exit")
-// 				return
-// 			case wresp := <- rch:
-// 				for _, ev := range wresp.Events {
-// 			        fmt.Printf("%s %q : %q\n", ev.Type, ev.Kv.Key, ev.Kv.Value)
-// 			        fmt.Printf("wresp.Header.Revision: %d\n", wresp.Header.Revision)
-// 					fmt.Println("wresp.IsProgressNotify:", wresp.IsProgressNotify())
-// 			    }
-// 			}
-// 		}
-// 	}()
-// }
-
-// func (client *Client) Write(ctx context.Context) {
-// 	log.Println("write")
-// 	_, err := client.db.Put(ctx, "stream:s1:transcode", "bar", clientv3.WithLease(client.lease))
+// func (client *Client) getServices(c context.Context, service string, rev int64) ([]service.Service, error) {
+// 	prefix := fmt.Sprintf("service:%s:", service)
+// 	ctx, cancel := context.WithTimeout(c, requestTimeout)
+// 	resp, err := client.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithRev(rev))
+// 	cancel()
 // 	if err != nil {
 // 		log.Fatal(err)
 // 	}
+// 	for _, ev := range resp.Kvs {
+// 		fmt.Printf("%s: %s\n", ev.Key, ev.Value)
+// 	}
+// 	return nil, nil // TODO
 // }

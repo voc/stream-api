@@ -1,71 +1,8 @@
 network:
-	name: "speedy.lan.c3voc.de"
-	endpoints: ["http://127.0.0.1:2379"]
+  endpoints: ["http://127.0.0.1:2379"]
 
-
-# services this node should provide
 sources:
-	plugin: "poll"
-	chain:
-		- dist
-		- transcode
-		- fanout_h264
-		- fanout_vpx
-		- fanout_audio
-		- fanout_thumbnail
-	stream:
-		url: "http://ingest.c3voc.de:8000"
-
-# service names must match those defined in the global chain to be assigned
-services:
-	# register our local distribution
-	dist:
-		plugin: "static"
-		stream:
-			url: "http://live.ber.c3voc.de:7999"
-
-	# register our transcode capability
-	transcode:
-		capacity: 1
-		stream_filter: "^foobar$"
-		plugin:
-			name: "exec"
-			path: "/transcode_vaapi.sh"
-			env:
-				key: "${stream:key}"
-				pull_url: "${source:url}/${stream:key}"
-				push_prefix: "${dist:url}"
-		stream:
-			h264_url: "${dist:url}/${stream:key}_h264"
-			vpx_url: "${dist:url}/${stream:key}_vpx"
-			audio_url: "${dist:url}/${stream:key}_audio"
-			thumb_url: "${dist:url}/${stream:key}_thumb"
-
-	# register fanout
-	fanout_h264:
-		plugin:
-			name: "exec"
-			path: "/fanout_h264.sh"
-			env:
-				PULL_URL: "${transcode:h264_url}"
-
-	fanout_vpx:
-		plugin:
-			name: "exec"
-			path: "/fanout_h264.sh"
-			env:
-				PULL_URL: "${transcode:vpx_url}"
-
-	fanout_audio:
-		plugin:
-			name: "exec"
-			path: "/fanout_h264.sh"
-			env:
-				PULL_URL: "${transcode:audio_url}"
-
-	fanout_thumbnail:
-		plugin:
-			name: "exec"
-			path: "/fanout_thumbnail.sh"
-			env:
-				PULL_URL: "${transcode:thumb_url}"
+  - type: icecast
+    url: http://ingest.c3voc.de:8000
+  - type: srtrelay
+    url: http://ingest.c3voc.de:8084

@@ -1,34 +1,44 @@
 package config
 
 import (
+	"io/ioutil"
+
 	"gopkg.in/yaml.v2"
 )
 
 type Network struct {
-	Name string
+	Name      string
 	Endpoints []string
 }
 
-type Sources struct {
-
+type SourceConfig struct {
+	Type string
+	URL  string
 }
 
-type Services struct {
-
+type TranscodeConfig struct {
+	Enable     bool
+	Capacity   int
+	Name       string
+	ConfigPath string
 }
 
 type Config struct {
-	Network Network
-	Sources Sources
-	Services Services
+	Network   Network
+	Sources   []SourceConfig
+	Transcode TranscodeConfig
 }
 
-func Parse(string path) (Config, error) {
+// Parse parses the config from a yaml file at path
+func Parse(path string) (Config, error) {
 	cfg := Config{}
-	err := yaml.Unmarshal([]byte(data), &cfg)
+	data, err := ioutil.ReadFile(path)
 	if err != nil {
-		return error
+		return cfg, err
 	}
-
-	return cfg
+	err = yaml.Unmarshal(data, &cfg)
+	if err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }

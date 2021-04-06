@@ -1,73 +1,73 @@
-type Stream interface {
-	Subscribe() <- // get stream var updates
-	Publish(plugin, interface{}) -> // publish var update
+package service
 
-	GetCapacity()
-}
+// type Stream interface {
+// 	Subscribe() <- // get stream var updates
+// 	Publish(plugin, interface{}) -> // publish var update
 
-type PluginAdaptor struct {
+// 	GetCapacity()
+// }
 
-}
+// type PluginAdaptor struct {
 
-// Parse variables from template statements
-func parseTemplate() {
+// }
 
-}
+// // Parse variables from template statements
+// func parseTemplate() {
 
-func NewPluginAdaptor(claim *Claim, cfg, plugin, stream) *PluginAdaptor {
-	pa := &PluginAdaptor{
-		plugin: plugin.Create(stream)
-		requiredVars: parseVars()
-	}
+// }
 
-	// handle.Update(plugin.vars)
+// func NewPluginAdaptor(claim *Claim, cfg, plugin, stream) *PluginAdaptor {
+// 	pa := &PluginAdaptor{
+// 		plugin: plugin.Create(stream)
+// 		requiredVars: parseVars()
+// 	}
 
-	go func() {
-		streamUpdate := stream.Subscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				stream.Unsubscribe()
-				return
-			case state := <-streamUpdate:
+// 	// handle.Update(plugin.vars)
 
-			}
-		}
-	}
+// 	go func() {
+// 		streamUpdate := stream.Subscribe()
+// 		for {
+// 			select {
+// 			case <-ctx.Done():
+// 				stream.Unsubscribe()
+// 				return
+// 			case state := <-streamUpdate:
 
-	pluginVars := template(cfg, stream)
+// 			}
+// 		}
+// 	}
 
-	go func() {
-		pluginUpdate := pa.plugin.Subscribe()
-		for {
-			select {
-			case <-ctx.Done():
-				pa.plugin.Unsubscribe()
-				return
-			case vars := <-pluginUpdate:
-				extend(vars, pa.template(cfg.staticVars))
+// 	pluginVars := template(cfg, stream)
 
-			}
-		}
-		func(vars) {
+// 	go func() {
+// 		pluginUpdate := pa.plugin.Subscribe()
+// 		for {
+// 			select {
+// 			case <-ctx.Done():
+// 				pa.plugin.Unsubscribe()
+// 				return
+// 			case vars := <-pluginUpdate:
+// 				extend(vars, pa.template(cfg.staticVars))
 
-		})
+// 			}
+// 		}
+// 		func(vars) {
 
-	}()
+// 		})
 
+// 	}()
 
+// 	return pa
+// }
 
-	return pa
-}
+// func (pa *PluginAdaptor) listen() {
 
-func (pa *PluginAdaptor) listen() {
+// }
 
-}
+// func (pa *PluginAdaptor) template() {
 
-func (pa *PluginAdaptor) template() {
+// }
 
-}
+// func (pa *PluginAdaptor) createPlugin() {
 
-func (pa *PluginAdaptor) createPlugin() {
-
-}
+// }

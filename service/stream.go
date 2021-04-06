@@ -1,4 +1,6 @@
+package service
+
 type Stream struct {
-	key string
+	key  string
 	data interface{}
 }

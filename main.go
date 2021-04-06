@@ -2,21 +2,22 @@ package main
 
 import (
 	// "crypto/tls"
-	"log"
-	"flag"
 	"context"
+	"flag"
 	"os"
 	"os/signal"
-	"time"
-	// "github.com/symptog/jitsi-colibri-exporter/collector"
-	"bitbucket.fem.tu-ilmenau.de/scm/~ischluff/stream-api/config"
-	"bitbucket.fem.tu-ilmenau.de/scm/~ischluff/stream-api/client"
-	"bitbucket.fem.tu-ilmenau.de/scm/~ischluff/stream-api/service"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
+	"github.com/Showmax/go-fqdn"
+	"github.com/voc/stream-api/client"
+	"github.com/voc/stream-api/config"
+	"github.com/voc/stream-api/publish"
+	"github.com/voc/stream-api/transcode"
 )
 
-type cancelFunc func(){}
-
-func handleSignal(ctx context.Context, cancel cancelFunc) {
+func handleSignal(ctx context.Context, cancel context.CancelFunc) {
 	// Set up channel on which to send signal notifications.
 	// We must use a buffered channel or risk missing the signal
 	// if we're not ready to receive when the signal is sent.
@@ -26,46 +27,90 @@ func handleSignal(ctx context.Context, cancel cancelFunc) {
 	go func() {
 		for {
 			select {
-				case <-ctx.Done():
-					return
-				case s := <-c:
-					log.Println("signal", s)
-					cancel()
+			case <-ctx.Done():
+				return
+			case s := <-c:
+				log.Info().Msgf("caught signal %s", s)
+				cancel()
 			}
 		}
 	}()
 }
 
+func getHostname() string {
+	name, err := fqdn.FqdnHostname()
+	if err != nil {
+		log.Error().Err(err).Msg("fqdn")
+		if err != fqdn.ErrFqdnNotFound {
+			return name
+		}
+
+		name, err = os.Hostname()
+		if err != nil {
+			log.Fatal().Err(err).Msg("hostname")
+		}
+	}
+	return name
+}
+
+type Service interface {
+	Wait()
+}
+
 func main() {
-	var configPath = flag.String("config", "config.yml", "path to configuration file")
+	name := getHostname()
+	configPath := flag.String("config", "config.yml", "path to configuration file")
+	debug := flag.Bool("debug", false, "sets log level to debug")
+	flag.StringVar(&name, "name", name, "set network name (defaults to fqdn)")
 	// var action = flag.String("action", "watch", "action: (watch|write)")
 	flag.Parse()
 
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	if *debug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
+
+	// parse config
+	cfg, err := config.Parse(*configPath)
+	if err != nil {
+		log.Fatal().Err(err)
+	}
+
+	// setup etcd context
+	cliCtx, cliCancel := context.WithCancel(context.Background())
+	defer cliCancel()
+
+	// connect to etcd
+	cfg.Network.Name = name
+	log.Debug().Msgf("Creating client %s", cfg.Network)
+	cli := client.NewClient(cliCtx, cfg.Network)
+
+	// setup service context
 	ctx, cancel := context.WithCancel(context.Background())
 	handleSignal(ctx, cancel)
 	defer cancel()
 
-	cfg, err := config.Parse(configPath)
-	if err != nil {
-		log.Fatal(err)
+	// setup publisher
+	var services []Service
+	if len(cfg.Sources) > 0 {
+		log.Debug().Msgf("Creating publisher")
+		services = append(services, publish.NewPublisher(ctx, cli, cfg.Sources))
 	}
 
-	registry := service.NewRegistry(cfg.Services)
-
-	cli := client.NewClient(ctx, cfg.Network)
-	cli.Publish(registry.Services())
-
-	cli.Watch()
-
-	// assigner := service.NewAssigner(ctx, client, cfg)
-
-	// if *action == "watch" {
-	// 	client.Watch(ctx)
-	// } else {
-	// 	client.Write(ctx)
-	// }
+	// setup transcoder
+	if cfg.Transcode.Enable {
+		log.Debug().Msgf("Creating transcoder")
+		cfg.Transcode.Name = name
+		services = append(services, transcode.NewTranscoder(ctx, cli, cfg.Transcode))
+	}
 
 	// Wait for graceful shutdown
 	<-ctx.Done()
-	time.Sleep(500*time.Millisecond)
+	for _, service := range services {
+		service.Wait()
+	}
+	cliCancel()
+	cli.Wait()
 }
