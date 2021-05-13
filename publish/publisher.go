@@ -24,14 +24,15 @@ type storedStream struct {
 type Publisher struct {
 	streams map[string]*storedStream
 	update  chan struct{}
-	api     client.PublisherAPI
+	name    string
+	api     client.ServiceAPI
 	done    sync.WaitGroup
 }
 
 var defaultScrapeInterval = time.Second * 3
 
-// NewPublisher creates a new Publisher
-func NewPublisher(ctx context.Context, api client.PublisherAPI, configs []config.SourceConfig) *Publisher {
+// New creates a new Publisher
+func New(ctx context.Context, configs []config.SourceConfig, api client.ServiceAPI, name string) *Publisher {
 	// create stream publishers
 	var scrapers []source.Scraper
 	for _, scraperConfig := range configs {
@@ -48,6 +49,7 @@ func NewPublisher(ctx context.Context, api client.PublisherAPI, configs []config
 	p := &Publisher{
 		update:  make(chan struct{}),
 		streams: make(map[string]*storedStream),
+		name:    name,
 		api:     api,
 	}
 

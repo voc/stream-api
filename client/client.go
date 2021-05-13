@@ -108,25 +108,20 @@ type WatchAPI interface {
 	Watch(ctx context.Context, prefix string) (UpdateChan, error)
 }
 
+type PublishAPI interface {
+	PublishService(ctx context.Context, service string, data string) error
+	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error)
+}
+
 type KeepaliveAPI interface {
 	RefreshLease(ctx context.Context, id LeaseID) error
 	RevokeLease(ctx context.Context, id LeaseID) error
 }
 
-type PublishAPI interface {
-	PublishService(ctx context.Context, service string, data string) error
-	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error)
+type ServiceAPI interface {
+	WatchAPI
+	PublishAPI
 	KeepaliveAPI
-}
-
-type PublisherAPI interface {
-	WatchAPI
-	PublishAPI
-}
-
-type TranscoderAPI interface {
-	WatchAPI
-	PublishAPI
 }
 
 // publishWithLease publishes a key with a new lease if the key doesn't exist yet

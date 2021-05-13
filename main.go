@@ -16,6 +16,7 @@ import (
 	"github.com/Showmax/go-fqdn"
 	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
+	"github.com/voc/stream-api/fanout"
 	"github.com/voc/stream-api/publish"
 	"github.com/voc/stream-api/transcode"
 )
@@ -103,15 +104,20 @@ func main() {
 	// setup publisher
 	var services []Service
 	if len(cfg.Sources) > 0 {
-		log.Debug().Msgf("Creating publisher")
-		services = append(services, publish.NewPublisher(ctx, cli, cfg.Sources))
+		log.Debug().Msgf("Creating publisher %v", cfg.Sources)
+		services = append(services, publish.New(ctx, cfg.Sources, cli, name))
 	}
 
 	// setup transcoder
 	if cfg.Transcode.Enable {
-		log.Debug().Msgf("Creating transcoder")
-		cfg.Transcode.Name = name
-		services = append(services, transcode.NewTranscoder(ctx, cli, cfg.Transcode))
+		log.Debug().Msgf("Creating transcoder %v", cfg.Transcode)
+		services = append(services, transcode.New(ctx, cfg.Transcode, cli, name))
+	}
+
+	// setup fanout
+	if cfg.Fanout.Enable {
+		log.Debug().Msgf("Creating fanout %v", cfg.Fanout)
+		services = append(services, fanout.New(ctx, cfg.Fanout, cli, name))
 	}
 
 	// Wait for graceful shutdown

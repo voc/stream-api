@@ -19,7 +19,12 @@ type SourceConfig struct {
 type TranscodeConfig struct {
 	Enable     bool   `yaml:"enable"`
 	Capacity   int    `yaml:"capacity"`
-	Name       string `yaml:"name"`
+	ConfigPath string `yaml:"configPath"`
+	Sink       string `yaml:"sink"`
+}
+
+type FanoutConfig struct {
+	Enable     bool   `yaml:"enable"`
 	ConfigPath string `yaml:"configPath"`
 	Sink       string `yaml:"sink"`
 }
@@ -28,6 +33,7 @@ type Config struct {
 	Network   Network
 	Sources   []SourceConfig
 	Transcode TranscodeConfig
+	Fanout    FanoutConfig
 }
 
 // Parse parses the config from a yaml file at path

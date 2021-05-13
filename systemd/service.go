@@ -63,8 +63,22 @@ func (s *Service) run(ctx context.Context) {
 	s.start(ctx)
 	defer s.stop()
 
-	ticker := time.NewTicker(s.conf.TTL / 2)
+	if s.conf.Lease != 0 && s.conf.API != nil {
+		s.keepaliveLease(ctx)
+	}
+
+	<-ctx.Done()
+}
+
+func (s *Service) keepaliveLease(ctx context.Context) {
+	timeout := s.conf.TTL / 2
+	if timeout <= 0 {
+		timeout = time.Second * 5
+	}
+
+	ticker := time.NewTicker(timeout)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():

@@ -28,7 +28,7 @@ import (
 var transcoderTTL = 10 * time.Second
 
 type Transcoder struct {
-	api        client.TranscoderAPI
+	api        client.ServiceAPI
 	done       sync.WaitGroup
 	name       string
 	capacity   int
@@ -36,21 +36,21 @@ type Transcoder struct {
 	sink       string // TODO: replace with dynamic discovery
 
 	// local state
-	jobs              map[string]*systemd.Service
+	services          map[string]*systemd.Service
 	transcoders       map[string]*TranscoderStatus
 	streams           map[string]*stream.Stream
 	streamTranscoders map[string]string
 }
 
-func NewTranscoder(ctx context.Context, api client.TranscoderAPI, conf config.TranscodeConfig) *Transcoder {
-	fmt.Println("transcoder", conf)
+func New(ctx context.Context, conf config.TranscodeConfig, api client.ServiceAPI, name string) *Transcoder {
+	log.Debug().Msgf("transcoder config %v", conf)
 	t := &Transcoder{
 		api:               api,
-		jobs:              make(map[string]*systemd.Service),
+		services:          make(map[string]*systemd.Service),
 		transcoders:       make(map[string]*TranscoderStatus),
 		streams:           make(map[string]*stream.Stream),
 		streamTranscoders: make(map[string]string),
-		name:              conf.Name,
+		name:              name,
 		capacity:          conf.Capacity,
 		configPath:        conf.ConfigPath,
 		sink:              conf.Sink,
@@ -64,8 +64,8 @@ func NewTranscoder(ctx context.Context, api client.TranscoderAPI, conf config.Tr
 }
 
 func (t *Transcoder) Wait() {
-	for _, job := range t.jobs {
-		job.Wait()
+	for _, service := range t.services {
+		service.Wait()
 	}
 	t.done.Wait()
 }
@@ -111,15 +111,15 @@ func (t *Transcoder) run(parentContext context.Context) {
 			}
 		// perform periodic updates
 		case <-ticker.C:
-			for key, job := range t.jobs {
-				// cleanup stopped jobs
-				if job.Stopped() {
-					log.Info().Msgf("transcode/job: stopped %s", key)
-					delete(t.jobs, key)
+			for key, service := range t.services {
+				// cleanup stopped services
+				if service.Stopped() {
+					log.Info().Msgf("transcode/service: stopped %s", key)
+					delete(t.services, key)
 				}
-				// stop unnecessary jobs
+				// stop unnecessary services
 				if _, found := t.streams[key]; !found {
-					job.Stop()
+					service.Stop()
 				}
 			}
 
@@ -146,7 +146,7 @@ func (t *Transcoder) run(parentContext context.Context) {
 // publishStatus announces the transcoder to the network
 func (t *Transcoder) publishStatus(ctx context.Context) {
 	var streams []string
-	for key := range t.jobs {
+	for key := range t.services {
 		streams = append(streams, key)
 	}
 	status := &TranscoderStatus{
@@ -237,7 +237,7 @@ func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, upd
 	case client.UpdateTypePut:
 		t.streamTranscoders[key] = string(update.KV.Value)
 	case client.UpdateTypeDelete:
-		delete(t.jobs, key)
+		delete(t.services, key)
 
 		stream, found := t.streams[key]
 		if !found {
@@ -254,7 +254,7 @@ func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, upd
 
 // shouldClaim computes whether we should claim a slot for a certain service
 func (t *Transcoder) shouldClaim() bool {
-	if t.capacity-len(t.jobs) <= 0 {
+	if t.capacity-len(t.services) <= 0 {
 		log.Info().Msg("Full capacity reached")
 		return false
 	}
@@ -284,18 +284,11 @@ func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
 		return
 	}
 	log.Info().Msgf("transcoder: claimed %s", s.Slug)
-	// job, err := newJob(ctx, &jobConfig{
-	// 	stream:     s,
-	// 	lease:      lease,
-	// 	api:        t.api,
-	// 	configPath: t.configPath,
-	// 	sinks:      []string{t.sink},
-	// })
-	job, err := t.createService(ctx, s, lease)
+	service, err := t.createService(ctx, s, lease)
 	if err != nil {
-		log.Error().Err(err).Msgf("transcoder/claim: job %s", s.Slug)
+		log.Error().Err(err).Msgf("transcoder/claim: service %s", s.Slug)
 	}
-	t.jobs[s.Slug] = job
+	t.services[s.Slug] = service
 	t.publishStatus(ctx)
 }
 
