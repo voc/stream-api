@@ -6,12 +6,15 @@ package transcode
 //  - start tracker workers on idle transcoders
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -19,7 +22,7 @@ import (
 	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
 	"github.com/voc/stream-api/stream"
-	"go.etcd.io/etcd/clientv3"
+	"github.com/voc/stream-api/systemd"
 )
 
 var transcoderTTL = 10 * time.Second
@@ -30,24 +33,27 @@ type Transcoder struct {
 	name       string
 	capacity   int
 	configPath string
+	sink       string // TODO: replace with dynamic discovery
 
-	jobs              map[string]*transcoderJob
+	// local state
+	jobs              map[string]*systemd.Service
 	transcoders       map[string]*TranscoderStatus
 	streams           map[string]*stream.Stream
 	streamTranscoders map[string]string
-	leases            []clientv3.LeaseID
 }
 
 func NewTranscoder(ctx context.Context, api client.TranscoderAPI, conf config.TranscodeConfig) *Transcoder {
+	fmt.Println("transcoder", conf)
 	t := &Transcoder{
 		api:               api,
-		jobs:              make(map[string]*transcoderJob),
+		jobs:              make(map[string]*systemd.Service),
 		transcoders:       make(map[string]*TranscoderStatus),
 		streams:           make(map[string]*stream.Stream),
 		streamTranscoders: make(map[string]string),
 		name:              conf.Name,
 		capacity:          conf.Capacity,
 		configPath:        conf.ConfigPath,
+		sink:              conf.Sink,
 	}
 
 	// watch source updates
@@ -103,6 +109,7 @@ func (t *Transcoder) run(parentContext context.Context) {
 			for _, update := range updates {
 				t.handleStream(ctx, update)
 			}
+		// perform periodic updates
 		case <-ticker.C:
 			for key, job := range t.jobs {
 				// cleanup stopped jobs
@@ -155,7 +162,7 @@ func (t *Transcoder) publishStatus(ctx context.Context) {
 	t.api.PublishService(ctx, "transcoder", string(data))
 }
 
-// handleTranscoder handles a single transcoder update
+// handleTranscoder handles an etcd transcoder update
 func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
@@ -182,7 +189,7 @@ func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
 	log.Debug().Msgf("transcoders %v", t.transcoders)
 }
 
-// handleStream handles a single stream update
+// handleStream handles an update in the etcd stream prefix
 func (t *Transcoder) handleStream(ctx context.Context, update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
@@ -201,6 +208,7 @@ func (t *Transcoder) handleStream(ctx context.Context, update *client.WatchUpdat
 	}
 }
 
+// handleStreamUpdate handles an etcd stream update
 func (t *Transcoder) handleStreamUpdate(ctx context.Context, key string, update *client.WatchUpdate) {
 	switch update.Type {
 	case client.UpdateTypePut:
@@ -223,6 +231,7 @@ func (t *Transcoder) handleStreamUpdate(ctx context.Context, key string, update 
 	log.Debug().Msgf("streams %v", t.streams)
 }
 
+// handleStreamTranscoder handles an etcd stream transcoder update
 func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, update *client.WatchUpdate) {
 	switch update.Type {
 	case client.UpdateTypePut:
@@ -256,7 +265,7 @@ func (t *Transcoder) shouldClaim() bool {
 	}
 	sort.Sort(ByLoad(transcoders))
 
-	// Claim slot if we are part the top candidate
+	// Claim stream if we are the top candidate
 	if len(transcoders) < 1 {
 		return false
 	}
@@ -266,6 +275,7 @@ func (t *Transcoder) shouldClaim() bool {
 	return true
 }
 
+// claimStream claims a stream for the current transcoder
 func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
 	key := fmt.Sprintf("stream:%s:transcoder", s.Slug)
 	lease, err := t.api.PublishWithLease(ctx, key, t.name, transcoderTTL)
@@ -274,10 +284,55 @@ func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
 		return
 	}
 	log.Info().Msgf("transcoder: claimed %s", s.Slug)
-	job, err := newJob(ctx, s, lease, t.api, t.configPath)
+	// job, err := newJob(ctx, &jobConfig{
+	// 	stream:     s,
+	// 	lease:      lease,
+	// 	api:        t.api,
+	// 	configPath: t.configPath,
+	// 	sinks:      []string{t.sink},
+	// })
+	job, err := t.createService(ctx, s, lease)
 	if err != nil {
 		log.Error().Err(err).Msgf("transcoder/claim: job %s", s.Slug)
 	}
 	t.jobs[s.Slug] = job
 	t.publishStatus(ctx)
+}
+
+var configTemplate = template.Must(template.New("transcoderConfig").Parse(`
+stream_key={{ .Slug }}
+format={{ .Format }}
+output={{ .OutputType }}
+transcoding_source={{ .Source }}
+transcoding_sink={{ index .Sinks 0 }}
+`))
+
+func (t *Transcoder) createService(ctx context.Context, s *stream.Stream, lease client.LeaseID) (*systemd.Service, error) {
+	type StreamConfig struct {
+		Slug       string
+		Format     string
+		OutputType string
+		Source     string
+		Sinks      []string
+	}
+	var buf bytes.Buffer
+	err := configTemplate.Execute(&buf, &StreamConfig{
+		Slug:   s.Slug,
+		Format: s.Format,
+		Source: s.Source,
+		Sinks:  []string{t.sink},
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("transcoder: templateConfig")
+	}
+
+	return systemd.NewService(ctx, &systemd.ServiceConfig{
+		Config:     buf.Bytes(),
+		ConfigPath: path.Join(t.configPath, s.Slug),
+		UnitName:   fmt.Sprintf("transcode@%s.target", s.Slug),
+
+		Lease: lease,
+		API:   t.api,
+		TTL:   transcoderTTL,
+	})
 }

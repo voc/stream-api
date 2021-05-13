@@ -13,12 +13,11 @@ import (
 	"github.com/voc/stream-api/config"
 	"github.com/voc/stream-api/source"
 	"github.com/voc/stream-api/stream"
-	"go.etcd.io/etcd/clientv3"
 )
 
 type storedStream struct {
 	stream *stream.Stream
-	lease  clientv3.LeaseID
+	lease  client.LeaseID
 }
 
 // Publisher publishes streams to the etcd store and keeps them refreshed
@@ -112,7 +111,7 @@ func (p *Publisher) run(parentContext context.Context, scrapers []source.Scraper
 	}
 }
 
-func (p *Publisher) publishStream(ctx context.Context, stream *stream.Stream) (clientv3.LeaseID, error) {
+func (p *Publisher) publishStream(ctx context.Context, stream *stream.Stream) (client.LeaseID, error) {
 	key := fmt.Sprintf("stream:%s", stream.Slug)
 	val, err := json.Marshal(stream)
 	if err != nil {

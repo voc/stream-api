@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/signal"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -61,6 +64,7 @@ func main() {
 	name := getHostname()
 	configPath := flag.String("config", "config.yml", "path to configuration file")
 	debug := flag.Bool("debug", false, "sets log level to debug")
+	profile := flag.String("profile", "", "set pprof address")
 	flag.StringVar(&name, "name", name, "set network name (defaults to fqdn)")
 	// var action = flag.String("action", "watch", "action: (watch|write)")
 	flag.Parse()
@@ -70,6 +74,10 @@ func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if *debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
+
+	if *profile != "" {
+		go http.ListenAndServe(*profile, nil)
 	}
 
 	// parse config

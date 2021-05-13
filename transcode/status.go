@@ -1,9 +1,10 @@
 package transcode
 
+// TranscoderStatus represents the transcoder state as announced via etcd
 type TranscoderStatus struct {
-	Name     string
-	Capacity int
-	Streams  []string
+	Name     string   `json:"name"`
+	Capacity int      `json:"capacity"`
+	Streams  []string `json:"streams"`
 }
 
 func minInt(a int, b int) int {

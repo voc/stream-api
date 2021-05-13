@@ -3,13 +3,13 @@ module github.com/voc/stream-api
 go 1.12
 
 require (
-	github.com/Showmax/go-fqdn v1.0.0 // indirect
-	github.com/coreos/etcd v3.3.19+incompatible // indirect
+	github.com/Showmax/go-fqdn v1.0.0
+	github.com/coreos/etcd v3.3.19+incompatible
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/pkg v0.0.0-20180928190104-399ea9e2e55f // indirect
 	github.com/go-git/go-git v4.7.0+incompatible
 	github.com/go-git/go-git/v5 v5.2.0
-	github.com/godbus/dbus v4.1.0+incompatible // indirect
+	github.com/godbus/dbus v4.1.0+incompatible
 	github.com/gogo/protobuf v1.3.1 // indirect
 	github.com/golang/protobuf v1.3.5
 	github.com/google/uuid v1.1.1 // indirect

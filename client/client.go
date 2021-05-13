@@ -16,6 +16,8 @@ import (
 
 const requestTimeout = time.Second
 
+type LeaseID clientv3.LeaseID
+
 // sanitizeKey replaces reserved characters with underscores
 func sanitizeKey(key string) string {
 	return strings.Replace(key, ":", "_", -1)
@@ -43,12 +45,6 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 		log.Fatal(err)
 	}
 
-	var keepalive <-chan *clientv3.LeaseKeepAliveResponse
-	keepalive, err = c.KeepAlive(parentContext, resp.ID)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	cli := &Client{
 		client: c,
 		lease:  resp.ID,
@@ -59,27 +55,49 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 	cli.done.Add(1)
 	go func() {
 		defer cli.done.Done()
-		for {
-			select {
-			case <-parentContext.Done():
-				ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-				defer cancel()
-				_, err = c.Revoke(ctx, resp.ID)
-				if err != nil {
-					log.Println(err)
-				}
-				err := c.Close()
-				if err != nil {
-					log.Println("client close:", err.Error())
-				}
-				return
-			case <-keepalive:
-				// todo: renew lease if resp == nil
-			}
-		}
+		cli.run(parentContext)
 	}()
 
 	return cli
+}
+
+func (client *Client) run(ctx context.Context) {
+	for {
+		// var keepalive <-chan *clientv3.LeaseKeepAliveResponse
+		keepalive, err := client.client.KeepAlive(ctx, client.lease)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("running keepalive")
+		done := client.keepalive(ctx, keepalive)
+		if done {
+			return
+		}
+	}
+}
+
+func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.LeaseKeepAliveResponse) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			ctx2, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			_, err := client.client.Revoke(ctx2, client.lease)
+			if err != nil {
+				log.Println(err)
+			}
+			err = client.client.Close()
+			if err != nil {
+				log.Println("client close:", err.Error())
+			}
+			return true
+		case _, ok := <-keepalive:
+			if !ok {
+				log.Println("keepalive stopped!")
+				return false
+			}
+		}
+	}
 }
 
 func (client *Client) Wait() {
@@ -90,11 +108,15 @@ type WatchAPI interface {
 	Watch(ctx context.Context, prefix string) (UpdateChan, error)
 }
 
+type KeepaliveAPI interface {
+	RefreshLease(ctx context.Context, id LeaseID) error
+	RevokeLease(ctx context.Context, id LeaseID) error
+}
+
 type PublishAPI interface {
 	PublishService(ctx context.Context, service string, data string) error
-	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (clientv3.LeaseID, error)
-	RefreshLease(ctx context.Context, id clientv3.LeaseID) error
-	RevokeLease(ctx context.Context, id clientv3.LeaseID) error
+	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error)
+	KeepaliveAPI
 }
 
 type PublisherAPI interface {
@@ -108,7 +130,7 @@ type TranscoderAPI interface {
 }
 
 // publishWithLease publishes a key with a new lease if the key doesn't exist yet
-func (client *Client) PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (clientv3.LeaseID, error) {
+func (client *Client) PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error) {
 	resp, err := client.client.Grant(ctx, int64(ttl/time.Second))
 	if err != nil {
 		return 0, err
@@ -129,7 +151,7 @@ func (client *Client) PublishWithLease(ctx context.Context, key string, value st
 		return 0, errors.New("already exists")
 	}
 
-	return resp.ID, nil
+	return LeaseID(resp.ID), nil
 }
 
 const (
@@ -211,13 +233,13 @@ func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, err
 	return ch, nil
 }
 
-func (client *Client) RefreshLease(ctx context.Context, id clientv3.LeaseID) error {
-	_, err := client.client.KeepAliveOnce(ctx, id)
+func (client *Client) RefreshLease(ctx context.Context, id LeaseID) error {
+	_, err := client.client.KeepAliveOnce(ctx, clientv3.LeaseID(id))
 	return err
 }
 
-func (client *Client) RevokeLease(ctx context.Context, id clientv3.LeaseID) error {
-	_, err := client.client.Revoke(ctx, id)
+func (client *Client) RevokeLease(ctx context.Context, id LeaseID) error {
+	_, err := client.client.Revoke(ctx, clientv3.LeaseID(id))
 	return err
 }
 

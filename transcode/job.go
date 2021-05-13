@@ -1,170 +1,224 @@
 package transcode
 
-import (
-	"bytes"
-	"context"
-	"fmt"
-	"io/ioutil"
-	"os"
-	"sync"
-	"sync/atomic"
-	"text/template"
-	"time"
+// import (
+// 	"bytes"
+// 	"context"
+// 	"fmt"
+// 	"io/ioutil"
+// 	"os"
+// 	"path"
+// 	"regexp"
+// 	"sync"
+// 	"sync/atomic"
+// 	"time"
 
-	"github.com/rs/zerolog/log"
+// 	"github.com/rs/zerolog/log"
 
-	"github.com/voc/stream-api/client"
-	"github.com/voc/stream-api/stream"
-	"github.com/voc/stream-api/systemd"
-	"go.etcd.io/etcd/clientv3"
-)
+// 	"github.com/voc/stream-api/client"
+// 	"github.com/voc/stream-api/stream"
+// 	"github.com/voc/stream-api/systemd"
+// 	"go.etcd.io/etcd/clientv3"
+// )
 
-type transcoderJob struct {
-	stream     *stream.Stream
-	lease      clientv3.LeaseID
-	api        client.TranscoderAPI
-	conn       *systemd.Conn
-	configPath string
+// var unitRegexp = regexp.MustCompile(`^transcode@(.+)\.target$`)
+// var unitFormat = "transcode@%s.target"
 
-	done    sync.WaitGroup
-	stopped atomic.Value
-	cancel  context.CancelFunc
-}
+// type jobConfig struct {
+// 	stream     *stream.Stream
+// 	lease      clientv3.LeaseID
+// 	api        client.TranscoderAPI
+// 	configPath string
+// 	sinks      []string
+// }
 
-func newJob(parentContext context.Context, stream *stream.Stream, lease clientv3.LeaseID, api client.TranscoderAPI, configPath string) (*transcoderJob, error) {
-	conn, err := systemd.Connect()
-	if err != nil {
-		return nil, err
-	}
+// // transcoderJob represents a single running stream transcode
+// type transcoderJob struct {
+// 	conf *jobConfig
+// 	conn *systemd.Conn
 
-	ctx, cancel := context.WithCancel(parentContext)
-	job := &transcoderJob{
-		stream:     stream,
-		lease:      lease,
-		api:        api,
-		conn:       conn,
-		configPath: configPath,
+// 	done    sync.WaitGroup
+// 	stopped atomic.Value
+// 	cancel  context.CancelFunc
+// }
 
-		cancel: cancel,
-	}
-	job.stopped.Store(false)
-	job.done.Add(1)
-	go job.run(ctx)
-	return job, nil
-}
+// // newJob creates a new transcoding job
+// func newJob(parentContext context.Context, conf *jobConfig) (*transcoderJob, error) {
+// 	conn, err := systemd.Connect()
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-func (j *transcoderJob) run(ctx context.Context) {
-	defer j.done.Done()
-	defer j.stopped.Store(true)
-	defer j.cancel()
-	ticker := time.NewTicker(transcoderTTL / 2)
-	defer ticker.Stop()
+// 	ctx, cancel := context.WithCancel(parentContext)
+// 	j := &transcoderJob{
+// 		conn:   conn,
+// 		conf:   conf,
+// 		cancel: cancel,
+// 	}
+// 	j.stopped.Store(false)
+// 	j.done.Add(1)
+// 	go j.run(ctx)
+// 	return j, nil
+// }
 
-	// template config
-	if j.templateConfig() {
-		j.startUnit(ctx)
-	}
-	defer j.stopUnit(context.Background())
+// // run starts the jobs maintenance loop
+// func (j *transcoderJob) run(ctx context.Context) {
+// 	defer j.done.Done()
+// 	defer j.stopped.Store(true)
+// 	defer j.cancel()
+// 	ticker := time.NewTicker(transcoderTTL / 2)
+// 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			revokeCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-			defer cancel()
-			err := j.api.RevokeLease(revokeCtx, j.lease)
-			if err != nil {
-				log.Error().Err(err).Msg("transcoder/job/lease")
-			}
-			return
-		case <-ticker.C:
-			err := j.api.RefreshLease(ctx, j.lease)
-			if err != nil {
-				log.Error().Err(err).Msg("transcoder/job/lease")
-				return
-			}
-		}
-	}
-}
+// 	// template config and restart on config change
+// 	if j.templateConfig() {
+// 		j.restartUnit(ctx)
+// 	} else {
+// 		j.startUnit(ctx)
+// 	}
+// 	j.enableUnit(ctx)
+// 	defer j.stopUnit(context.Background())
+// 	defer j.removeConfig()
 
-type StreamConfig struct {
-	Slug       string
-	Format     string
-	OutputType string
-	Source     string
-	Sink       string
-}
+// 	for {
+// 		select {
+// 		case <-ctx.Done():
+// 			revokeCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+// 			defer cancel()
+// 			err := j.conf.api.RevokeLease(revokeCtx, j.conf.lease)
+// 			if err != nil {
+// 				log.Error().Err(err).Msg("transcoder/job/lease")
+// 			}
+// 			return
+// 		case <-ticker.C:
+// 			err := j.conf.api.RefreshLease(ctx, j.conf.lease)
+// 			if err != nil {
+// 				log.Error().Err(err).Msg("transcoder/job/lease")
+// 				return
+// 			}
+// 			// j.syncUnitState(ctx)
+// 		}
+// 	}
+// }
 
-var configTemplate = template.Must(template.New("transcoderConfig").Parse(`
-stream_key={{ .Slug }}
-format={{ .Format }}
-output={{ .OutputType }}
-transcoding_source={{ .Source }}
-transcoding_sink={{ .Sink }}
-`))
+// func (j *transcoderJob) configFile() string {
+// 	return path.Join(j.conf.configPath, j.conf.stream.Slug)
+// }
 
-func (j *transcoderJob) templateConfig() bool {
-	var buf bytes.Buffer
-	err := configTemplate.Execute(&buf, &StreamConfig{
-		Slug:   j.stream.Slug,
-		Format: j.stream.Format,
-		Source: j.stream.Source,
-	})
-	if err != nil {
-		log.Fatal().Err(err).Msg("transcoder/job: templateConfig")
-	}
-	newConf := buf.Bytes()
+// // templateConfig templates the transcoder config
+// // if the file on disk changed it returns true
+// func (j *transcoderJob) templateConfig() bool {
+// 	var buf bytes.Buffer
+// 	type StreamConfig struct {
+// 		Slug       string
+// 		Format     string
+// 		OutputType string
+// 		Source     string
+// 		Sinks      []string
+// 	}
+// 	err := configTemplate.Execute(&buf, &StreamConfig{
+// 		Slug:   j.conf.stream.Slug,
+// 		Format: j.conf.stream.Format,
+// 		Source: j.conf.stream.Source,
+// 		Sinks:  j.conf.sinks,
+// 	})
+// 	if err != nil {
+// 		log.Fatal().Err(err).Msg("transcoder/job: templateConfig")
+// 	}
+// 	newConf := buf.Bytes()
 
-	filename := j.configPath + "/" + j.stream.Slug
-	oldConf, err := ioutil.ReadFile(filename)
-	if err == nil && bytes.Compare(oldConf, newConf) == 0 {
-		return false
-	}
-	err = os.WriteFile(filename, newConf, 0644)
-	if err != nil {
-		log.Error().Err(err).Msg("transcoder/job: writeConfig")
-	}
-	return true
-}
+// 	filename := j.configFile()
+// 	oldConf, err := ioutil.ReadFile(filename)
+// 	fmt.Println("got file", filename, string(oldConf))
+// 	if err == nil && bytes.Compare(oldConf, newConf) == 0 {
+// 		return false
+// 	}
+// 	err = os.WriteFile(filename, newConf, 0644)
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: writeConfig")
+// 	}
+// 	fmt.Println("wrote file", string(filename), string(newConf))
+// 	return true
+// }
 
-func (j *transcoderJob) removeConfig() {
-	filename := j.configPath + "/" + j.stream.Slug
-	if err := os.Remove(filename); err != nil {
-		log.Error().Err(err).Msg("transcoder/job: config remove")
-	}
-}
+// // removeConfig cleans up the config file
+// func (j *transcoderJob) removeConfig() {
+// 	filename := j.configFile()
+// 	if err := os.Remove(filename); err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: config remove")
+// 	}
+// }
 
-func (j *transcoderJob) startUnit(ctx context.Context) {
-	unitName := fmt.Sprintf("transcode@%s", j.stream.Slug)
-	err := j.conn.RestartUnit(ctx, unitName)
-	if err != nil {
-		log.Error().Err(err).Msg("transcoder/job: restartUnit")
-	}
-	err = j.conn.EnableUnit(ctx, unitName)
-	if err != nil {
-		log.Error().Err(err).Msg("transcoder/job: enableUnit")
-	}
-}
+// // unitName returns the systemd unit name for this transcoding job
+// func (j *transcoderJob) unitName() string {
+// 	return fmt.Sprintf(unitFormat, j.conf.stream.Slug)
+// }
 
-func (j *transcoderJob) stopUnit(ctx context.Context) {
-	unitName := fmt.Sprintf("transcode@%s", j.stream.Slug)
-	err := j.conn.DisableUnit(ctx, unitName)
-	if err != nil {
-		log.Error().Err(err).Msg("transcoder/job: disableUnit")
-	}
-	err = j.conn.StopUnit(ctx, unitName)
-	if err != nil {
-		log.Error().Err(err).Msg("transcoder/job: stopUnit")
-	}
-}
+// func (j *transcoderJob) startUnit(ctx context.Context) {
+// 	log.Debug().Msgf("transcoder/job: start %s", j.unitName())
+// 	err := j.conn.StartUnit(ctx, j.unitName())
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: startUnit")
+// 	}
+// }
 
-func (j *transcoderJob) Stop() {
-	j.cancel()
-}
+// func (j *transcoderJob) restartUnit(ctx context.Context) {
+// 	log.Debug().Msgf("transcoder/job: restart %s", j.unitName())
+// 	err := j.conn.RestartUnit(ctx, j.unitName())
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: restartUnit")
+// 	}
+// }
 
-func (j *transcoderJob) Wait() {
-	j.done.Wait()
-}
+// func (j *transcoderJob) enableUnit(ctx context.Context) {
+// 	log.Debug().Msgf("transcoder/job: enable %s", j.unitName())
+// 	err := j.conn.EnableUnit(ctx, j.unitName())
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: enableUnit")
+// 	}
+// }
 
-func (j *transcoderJob) Stopped() bool {
-	return j.stopped.Load().(bool)
-}
+// func (j *transcoderJob) stopUnit(ctx context.Context) {
+// 	err := j.conn.DisableUnit(ctx, j.unitName())
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: disableUnit")
+// 	}
+// 	err = j.conn.StopUnit(ctx, j.unitName())
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/job: stopUnit")
+// 	}
+// }
+
+// // syncState syncs transcoding jobs with running systemd units
+// // not needed if unit can't fail (Restart=always, StartLimitInterval=0)
+// func (j *transcoderJob) syncUnitState(ctx context.Context) {
+// 	units, err := j.conn.ListUnits(ctx)
+// 	if err != nil {
+// 		log.Error().Err(err).Msg("transcoder/sync: listUnits")
+// 	}
+
+// 	// reenable failed unit
+// 	for _, unit := range units {
+// 		res := unitRegexp.FindSubmatch([]byte(unit.Name))
+// 		if res == nil || string(res[1]) != j.conf.stream.Slug {
+// 			continue
+// 		}
+
+// 		fmt.Println(unit, j.conf.stream.Slug)
+
+// 		if unit.ActiveState == "failed" {
+// 			log.Info().Msgf("transcoder/sync: restarting "+unitFormat, j.conf.stream.Slug)
+// 			j.restartUnit(ctx)
+// 		}
+// 	}
+// }
+
+// func (j *transcoderJob) Stop() {
+// 	j.cancel()
+// }
+
+// func (j *transcoderJob) Wait() {
+// 	j.done.Wait()
+// }
+
+// func (j *transcoderJob) Stopped() bool {
+// 	return j.stopped.Load().(bool)
+// }

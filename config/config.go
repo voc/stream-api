@@ -7,20 +7,21 @@ import (
 )
 
 type Network struct {
-	Name      string
-	Endpoints []string
+	Name      string   `yaml:"name"`
+	Endpoints []string `yaml:"endpoints"`
 }
 
 type SourceConfig struct {
-	Type string
-	URL  string
+	Type string `yaml:"type"`
+	URL  string `yaml:"url"`
 }
 
 type TranscodeConfig struct {
-	Enable     bool
-	Capacity   int
-	Name       string
-	ConfigPath string
+	Enable     bool   `yaml:"enable"`
+	Capacity   int    `yaml:"capacity"`
+	Name       string `yaml:"name"`
+	ConfigPath string `yaml:"configPath"`
+	Sink       string `yaml:"sink"`
 }
 
 type Config struct {
