@@ -3,11 +3,11 @@ package client
 import (
 	"context"
 	"errors"
-	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/coreos/etcd/mvcc/mvccpb"
 	"github.com/voc/stream-api/config"
@@ -36,13 +36,13 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 		Endpoints: cfg.Endpoints,
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("etcd client")
 	}
 
 	// minimum lease TTL is 5-second
 	resp, err := c.Grant(parentContext, 5)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("grant")
 	}
 
 	cli := &Client{
@@ -63,12 +63,11 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 
 func (client *Client) run(ctx context.Context) {
 	for {
-		// var keepalive <-chan *clientv3.LeaseKeepAliveResponse
 		keepalive, err := client.client.KeepAlive(ctx, client.lease)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal().Err(err).Msg("keepalive")
 		}
-		log.Println("running keepalive")
+		log.Debug().Msg("running keepalive")
 		done := client.keepalive(ctx, keepalive)
 		if done {
 			return
@@ -84,16 +83,16 @@ func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.
 			defer cancel()
 			_, err := client.client.Revoke(ctx2, client.lease)
 			if err != nil {
-				log.Println(err)
+				log.Error().Err(err).Msg("revoke")
 			}
 			err = client.client.Close()
 			if err != nil {
-				log.Println("client close:", err.Error())
+				log.Error().Err(err).Msg("client close")
 			}
 			return true
 		case _, ok := <-keepalive:
 			if !ok {
-				log.Println("keepalive stopped!")
+				log.Error().Msg("keepalive stopped")
 				return false
 			}
 		}
@@ -163,7 +162,7 @@ type UpdateChan chan []*WatchUpdate
 
 // watch prefix and receive current state
 func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, error) {
-	log.Println("watch", prefix)
+	log.Debug().Msgf("watch %s", prefix)
 	ctx2, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
 
 	opts := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithProgressNotify()}
@@ -205,11 +204,11 @@ func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, err
 			case change := <-watchChan:
 				err := change.Err()
 				if change.Canceled {
-					log.Println("watch chan closed", err.Error())
+					log.Error().Err(err).Msg("watch closed")
 					return
 				}
 				if err != nil {
-					log.Println("watch error", err.Error())
+					log.Error().Err(err).Msg("watch")
 					continue
 				}
 				if change.Header.Revision <= lastRev {
@@ -240,7 +239,8 @@ func (client *Client) RevokeLease(ctx context.Context, id LeaseID) error {
 
 // publishService publishes a service endpoint on the current host
 func (client *Client) PublishService(ctx context.Context, service string, data string) error {
-	key := fmt.Sprintf("service:%s:%s", service, client.name)
+	key := ServicePath(service, client.name)
+	log.Info().Msgf("client/publish %s", key)
 	// TODO: implement as transaction to prevent double publish!
 	_, err := client.client.Put(ctx, key, data, clientv3.WithLease(client.lease))
 	return err

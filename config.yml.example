@@ -1,0 +1,22 @@
+network:
+  endpoints: ["http://127.0.0.1:2379"]
+
+# sources:
+#   - type: icecast
+#     url: http://ingest.c3voc.de:8000
+#   - type: srtrelay
+#     url: http://ingest.c3voc.de:8084
+
+# monitor:
+#   enable: yes
+#   address: ":8080"
+
+# transcode:
+#   enable: yes
+#   capacity: 4
+#   configPath: /opt/transcoder/config
+
+# fanout:
+#   enable: yes
+#   configPath: /opt/fanout/config
+#   sink: live.ber.c3voc.de:7999

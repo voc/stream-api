@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
-	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -65,7 +64,7 @@ func (t *Fanout) run(parentContext context.Context) {
 	defer cancel()
 
 	t.publishStatus(ctx)
-	streamChan, err := t.api.Watch(ctx, "stream:")
+	streamChan, err := t.api.Watch(ctx, client.StreamPrefix)
 	if err != nil {
 		log.Fatal().Err(err).Msg("stream watch")
 		return
@@ -125,12 +124,10 @@ func (t *Fanout) handleStream(ctx context.Context, update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
 	}
-
-	parts := strings.Split(string(update.KV.Key), ":")
-	if len(parts) != 2 {
+	key := client.ParseStreamName(string(update.KV.Key))
+	if key == "" {
 		return
 	}
-	key := parts[1]
 
 	switch update.Type {
 	case client.UpdateTypePut:

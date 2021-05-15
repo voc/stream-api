@@ -1,6 +1,6 @@
 module github.com/voc/stream-api
 
-go 1.12
+go 1.16
 
 require (
 	github.com/Showmax/go-fqdn v1.0.0
@@ -15,6 +15,7 @@ require (
 	github.com/google/uuid v1.1.1 // indirect
 	github.com/gorilla/mux v1.7.4
 	github.com/gorilla/schema v1.1.0
+	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/json-iterator/go v1.1.9 // indirect
 	github.com/modern-go/reflect2 v1.0.1 // indirect
 	github.com/pkg/errors v0.8.1

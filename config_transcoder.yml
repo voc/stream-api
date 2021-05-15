@@ -1,7 +1,0 @@
-network:
-  endpoints: ["http://127.0.0.1:2379"]
-
-transcode:
-  enable: yes
-  capacity: 4
-  configPath: "/opt/voc/transcoding"

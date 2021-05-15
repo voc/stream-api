@@ -1,15 +1,15 @@
 package stream
 
 type Stream struct {
-	Format string // ffmpeg format descriptor
-	Source string // complete source URL
-	Slug   string // stream slug
+	Format string `json:"format"` // ffmpeg format descriptor
+	Source string `json:"source"` // complete source URL
+	Slug   string `json:"slug"`   // stream slug
 }
 
 type GlobalConfig struct {
-	IcecastUser     string
-	IcecastPassword string
+	IcecastUser     string `json:"icecastUser"`
+	IcecastPassword string `json:"icecastPassword"`
 
 	// TODO: replace this with a dynamic CDN-sink service
-	Sink string
+	Sink string `json:"sink"`
 }

@@ -29,11 +29,17 @@ type FanoutConfig struct {
 	Sink       string `yaml:"sink"`
 }
 
+type MonitorConfig struct {
+	Enable  bool   `yaml:"enable"`
+	Address string `yaml:"address"`
+}
+
 type Config struct {
 	Network   Network
 	Sources   []SourceConfig
 	Transcode TranscodeConfig
 	Fanout    FanoutConfig
+	Monitor   MonitorConfig
 }
 
 // Parse parses the config from a yaml file at path

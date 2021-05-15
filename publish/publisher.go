@@ -3,9 +3,7 @@ package publish
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -68,7 +66,7 @@ func (p *Publisher) run(parentContext context.Context, scrapers []source.Scraper
 	ctx, cancel := context.WithCancel(parentContext)
 	defer cancel()
 
-	watchChan, err := p.api.Watch(ctx, "stream:")
+	watchChan, err := p.api.Watch(ctx, client.StreamPrefix)
 	if err != nil {
 		log.Println("publish/watch:", err.Error())
 		return
@@ -99,11 +97,10 @@ func (p *Publisher) run(parentContext context.Context, scrapers []source.Scraper
 			}
 			// Delete expired streams from local cache
 			for _, update := range updates {
-				parts := strings.Split(string(update.KV.Key), ":")
-				if len(parts) != 2 {
+				key := client.ParseStreamName(string(update.KV.Key))
+				if key == "" {
 					continue
 				}
-				key := parts[1]
 				_, exists := p.streams[key]
 				if exists && update.Type == client.UpdateTypeDelete {
 					delete(p.streams, key)
@@ -114,7 +111,7 @@ func (p *Publisher) run(parentContext context.Context, scrapers []source.Scraper
 }
 
 func (p *Publisher) publishStream(ctx context.Context, stream *stream.Stream) (client.LeaseID, error) {
-	key := fmt.Sprintf("stream:%s", stream.Slug)
+	key := client.StreamPath(stream.Slug)
 	val, err := json.Marshal(stream)
 	if err != nil {
 		return 0, err

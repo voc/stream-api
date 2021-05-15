@@ -17,6 +17,7 @@ import (
 	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
 	"github.com/voc/stream-api/fanout"
+	"github.com/voc/stream-api/monitor"
 	"github.com/voc/stream-api/publish"
 	"github.com/voc/stream-api/transcode"
 )
@@ -100,9 +101,15 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	handleSignal(ctx, cancel)
 	defer cancel()
+	var services []Service
+
+	// setup monitor
+	if cfg.Monitor.Enable {
+		log.Debug().Msgf("Creating monitor %v", cfg.Monitor)
+		services = append(services, monitor.New(ctx, cfg.Monitor, cli))
+	}
 
 	// setup publisher
-	var services []Service
 	if len(cfg.Sources) > 0 {
 		log.Debug().Msgf("Creating publisher %v", cfg.Sources)
 		services = append(services, publish.New(ctx, cfg.Sources, cli, name))

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"path"
 	"sort"
-	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -26,6 +25,8 @@ import (
 )
 
 var transcoderTTL = 10 * time.Second
+
+var ServicePrefix = client.ServicePrefix("transcoder")
 
 type Transcoder struct {
 	api        client.ServiceAPI
@@ -43,7 +44,6 @@ type Transcoder struct {
 }
 
 func New(ctx context.Context, conf config.TranscodeConfig, api client.ServiceAPI, name string) *Transcoder {
-	log.Debug().Msgf("transcoder config %v", conf)
 	t := &Transcoder{
 		api:               api,
 		services:          make(map[string]*systemd.Service),
@@ -77,12 +77,12 @@ func (t *Transcoder) run(parentContext context.Context) {
 	defer cancel()
 
 	t.publishStatus(ctx)
-	transcoderChan, err := t.api.Watch(ctx, "service:transcoder:")
+	transcoderChan, err := t.api.Watch(ctx, client.TranscoderPrefix)
 	if err != nil {
 		log.Fatal().Err(err).Msg("transcoder watch")
 		return
 	}
-	streamChan, err := t.api.Watch(ctx, "stream:")
+	streamChan, err := t.api.Watch(ctx, client.StreamPrefix)
 	if err != nil {
 		log.Fatal().Err(err).Msg("stream watch")
 		return
@@ -116,6 +116,7 @@ func (t *Transcoder) run(parentContext context.Context) {
 				if service.Stopped() {
 					log.Info().Msgf("transcode/service: stopped %s", key)
 					delete(t.services, key)
+					t.publishStatus(ctx)
 				}
 				// stop unnecessary services
 				if _, found := t.streams[key]; !found {
@@ -167,12 +168,10 @@ func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
 	}
-
-	parts := strings.Split(string(update.KV.Key), ":")
-	if len(parts) != 3 {
+	name := client.ParseServiceName(string(update.KV.Key))
+	if name == "" {
 		return
 	}
-	name := parts[2]
 
 	switch update.Type {
 	case client.UpdateTypePut:
@@ -194,16 +193,15 @@ func (t *Transcoder) handleStream(ctx context.Context, update *client.WatchUpdat
 	if update.KV == nil {
 		return
 	}
-
-	parts := strings.Split(string(update.KV.Key), ":")
-	if len(parts) < 2 {
+	path := string(update.KV.Key)
+	name := client.ParseStreamName(path)
+	if name == "" {
 		return
 	}
-	name := parts[1]
 
-	if len(parts) == 2 {
+	if client.PathIsStreamUpdate(path) {
 		t.handleStreamUpdate(ctx, name, update)
-	} else if len(parts) == 3 && parts[2] == "transcoder" {
+	} else if client.PathIsStreamTranscoderUpdate(path) {
 		t.handleStreamTranscoder(ctx, name, update)
 	}
 }
@@ -228,7 +226,7 @@ func (t *Transcoder) handleStreamUpdate(ctx context.Context, key string, update 
 	case client.UpdateTypeDelete:
 		delete(t.streams, key)
 	}
-	log.Debug().Msgf("streams %v", t.streams)
+	log.Debug().Msgf("transcoder/streams %v", t.streams)
 }
 
 // handleStreamTranscoder handles an etcd stream transcoder update
@@ -237,7 +235,7 @@ func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, upd
 	case client.UpdateTypePut:
 		t.streamTranscoders[key] = string(update.KV.Value)
 	case client.UpdateTypeDelete:
-		delete(t.services, key)
+		delete(t.streamTranscoders, key)
 
 		stream, found := t.streams[key]
 		if !found {
@@ -249,7 +247,7 @@ func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, upd
 		}
 		t.claimStream(ctx, stream)
 	}
-	log.Debug().Msgf("streamsTranscoders %v", t.streamTranscoders)
+	log.Debug().Msgf("transcoder/streamsTranscoders %v", t.streamTranscoders)
 }
 
 // shouldClaim computes whether we should claim a slot for a certain service
@@ -277,7 +275,7 @@ func (t *Transcoder) shouldClaim() bool {
 
 // claimStream claims a stream for the current transcoder
 func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
-	key := fmt.Sprintf("stream:%s:transcoder", s.Slug)
+	key := client.StreamTranscoderPath(s.Slug)
 	lease, err := t.api.PublishWithLease(ctx, key, t.name, transcoderTTL)
 	if err != nil {
 		log.Error().Err(err).Msgf("transcoder/claim: %s", s.Slug)
