@@ -1,5 +1,9 @@
 network:
   endpoints: ["http://127.0.0.1:2379"]
+#   tls:
+#     certFile: "cert.pem"
+#     keyFile: "cert-key.pem"
+#     trustedCaFile: "ca.pem"
 
 # sources:
 #   - type: icecast

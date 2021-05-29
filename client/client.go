@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/coreos/etcd/mvcc/mvccpb"
+	"github.com/coreos/etcd/pkg/transport"
 	"github.com/voc/stream-api/config"
 	"go.etcd.io/etcd/clientv3"
 )
@@ -32,11 +34,25 @@ type Client struct {
 }
 
 func NewClient(parentContext context.Context, cfg config.Network) *Client {
+	var tlsConfig *tls.Config
+	if cfg.TLS != nil {
+		tlsInfo := transport.TLSInfo{
+			CertFile:      cfg.TLS.CertFile,
+			KeyFile:       cfg.TLS.KeyFile,
+			TrustedCAFile: cfg.TLS.TrustedCAFile,
+		}
+		var err error
+		tlsConfig, err = tlsInfo.ClientConfig()
+		if err != nil {
+			log.Fatal().Err(err).Msg("client: tls")
+		}
+	}
 	c, err := clientv3.New(clientv3.Config{
 		Endpoints: cfg.Endpoints,
+		TLS:       tlsConfig,
 	})
 	if err != nil {
-		log.Fatal().Err(err).Msg("etcd client")
+		log.Fatal().Err(err).Msg("client: new")
 	}
 
 	// minimum lease TTL is 5-second
@@ -65,9 +81,9 @@ func (client *Client) run(ctx context.Context) {
 	for {
 		keepalive, err := client.client.KeepAlive(ctx, client.lease)
 		if err != nil {
-			log.Fatal().Err(err).Msg("keepalive")
+			log.Fatal().Err(err).Msg("client: keepalive")
 		}
-		log.Debug().Msg("running keepalive")
+		log.Debug().Msg("client: running keepalive")
 		done := client.keepalive(ctx, keepalive)
 		if done {
 			return
@@ -83,16 +99,16 @@ func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.
 			defer cancel()
 			_, err := client.client.Revoke(ctx2, client.lease)
 			if err != nil {
-				log.Error().Err(err).Msg("revoke")
+				log.Error().Err(err).Msg("client: revoke")
 			}
 			err = client.client.Close()
 			if err != nil {
-				log.Error().Err(err).Msg("client close")
+				log.Error().Err(err).Msg("client: close")
 			}
 			return true
 		case _, ok := <-keepalive:
 			if !ok {
-				log.Error().Msg("keepalive stopped")
+				log.Error().Msg("client: keepalive stopped")
 				return false
 			}
 		}
@@ -112,6 +128,11 @@ type PublishAPI interface {
 	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error)
 }
 
+type RestAPI interface {
+	Get(ctx context.Context, key string) ([]byte, error)
+	Put(ctx context.Context, key string, value []byte) error
+}
+
 type KeepaliveAPI interface {
 	RefreshLease(ctx context.Context, id LeaseID) error
 	RevokeLease(ctx context.Context, id LeaseID) error
@@ -121,6 +142,7 @@ type ServiceAPI interface {
 	WatchAPI
 	PublishAPI
 	KeepaliveAPI
+	RestAPI
 }
 
 // publishWithLease publishes a key with a new lease if the key doesn't exist yet
@@ -131,9 +153,7 @@ func (client *Client) PublishWithLease(ctx context.Context, key string, value st
 	}
 
 	res, err := client.client.Txn(ctx).
-		// txn value comparisons are lexical
 		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
-		// the "Then" runs, since "xyz" > "abc"
 		Then(clientv3.OpPut(key, value, clientv3.WithLease(resp.ID))).
 		Commit()
 
@@ -162,7 +182,7 @@ type UpdateChan chan []*WatchUpdate
 
 // watch prefix and receive current state
 func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, error) {
-	log.Debug().Msgf("watch %s", prefix)
+	log.Debug().Msgf("client: watching %s", prefix)
 	ctx2, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
 
 	opts := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithProgressNotify()}
@@ -204,11 +224,11 @@ func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, err
 			case change := <-watchChan:
 				err := change.Err()
 				if change.Canceled {
-					log.Error().Err(err).Msg("watch closed")
+					log.Error().Err(err).Msg("client: watch closed")
 					return
 				}
 				if err != nil {
-					log.Error().Err(err).Msg("watch")
+					log.Error().Err(err).Msg("client: watch")
 					continue
 				}
 				if change.Header.Revision <= lastRev {
@@ -244,6 +264,23 @@ func (client *Client) PublishService(ctx context.Context, service string, data s
 	// TODO: implement as transaction to prevent double publish!
 	_, err := client.client.Put(ctx, key, data, clientv3.WithLease(client.lease))
 	return err
+}
+
+func (client *Client) Put(ctx context.Context, key string, value []byte) error {
+	_, err := client.client.KV.Put(ctx, key, string(value))
+	return err
+}
+
+func (client *Client) Get(ctx context.Context, key string) ([]byte, error) {
+	res, err := client.client.KV.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Kvs) == 0 {
+		return nil, errors.New("empty")
+	}
+
+	return res.Kvs[0].Value, nil
 }
 
 // GetServices fetches all service owners for a given service name

@@ -6,9 +6,16 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+type TLSConfig struct {
+	CertFile      string `yaml:"certFile"`
+	KeyFile       string `yaml:"keyFile"`
+	TrustedCAFile string `yaml:"trustedCaFile"`
+}
+
 type Network struct {
-	Name      string   `yaml:"name"`
-	Endpoints []string `yaml:"endpoints"`
+	Name      string     `yaml:"name"`
+	Endpoints []string   `yaml:"endpoints"`
+	TLS       *TLSConfig `yaml:"tls"`
 }
 
 type SourceConfig struct {
