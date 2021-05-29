@@ -9,7 +9,7 @@ import (
 
 	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
-	"github.com/voc/stream-api/source"
+	"github.com/voc/stream-api/publish/source"
 	"github.com/voc/stream-api/stream"
 )
 
