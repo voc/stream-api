@@ -45,7 +45,7 @@ func newServer(ctx context.Context, updates <-chan map[string]interface{}, conf 
 		state:        make(map[string]interface{}),
 	}
 	s.done.Add(1)
-	go s.run(ctx)
+	go s.run(ctx, &conf)
 	return s
 }
 
@@ -53,7 +53,7 @@ func (s *server) Wait() {
 	s.done.Done()
 }
 
-func (s *server) run(parentContext context.Context) {
+func (s *server) run(parentContext context.Context, conf *config.MonitorConfig) {
 	defer s.done.Done()
 
 	router := mux.NewRouter()
@@ -61,7 +61,7 @@ func (s *server) run(parentContext context.Context) {
 	router.HandleFunc("/ws", s.wsHandler)
 	router.PathPrefix("/").Handler(http.FileServer(http.FS(static)))
 
-	srv := &http.Server{Addr: ":8080", Handler: router}
+	srv := &http.Server{Addr: conf.Address, Handler: router}
 
 	s.done.Add(1)
 	go func() {
