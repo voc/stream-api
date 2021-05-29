@@ -3,6 +3,7 @@ import {SOCKET_CONNECTED, SOCKET_DISCONNECTED, UPDATE_STATE} from "./actions"
 const INITIAL_STATE = {
   streams: {},
   transcoders: {},
+  streamTranscoders: {},
   fanouts: {},
   socketConnected: false,
 };
