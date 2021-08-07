@@ -1,3 +1,4 @@
 stream-api
 default.etcd/
 /config.yml
+/ssl

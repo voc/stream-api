@@ -11,9 +11,13 @@ network:
 #   - type: srtrelay
 #     url: http://ingest.c3voc.de:8084
 
+# auth:
+#  enable: yes
+#  address: ":8080"
+
 # monitor:
 #   enable: yes
-#   address: ":8080"
+#   address: ":8081"
 
 # transcode:
 #   enable: yes

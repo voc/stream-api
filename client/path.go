@@ -7,11 +7,12 @@ import (
 
 // prefixes
 const (
-	TranscoderPrefix = "/service/transcode"
-	SourcePrefix     = "/service/source"
-	FanoutPrefix     = "/service/fanout"
-	StreamPrefix     = "/stream"
-	servicePrefix    = "/service"
+	TranscoderPrefix     = "/service/transcode/"
+	SourcePrefix         = "/service/source/"
+	FanoutPrefix         = "/service/fanout/"
+	StreamPrefix         = "/stream/"
+	StreamSettingsPrefix = "/streamSettings/"
+	servicePrefix        = "/service/"
 )
 
 // ParseServiceName parses service name from path, returns "" if path is not a service path
@@ -42,7 +43,7 @@ func ParseStreamTranscoder(path string) string {
 	return parts[3]
 }
 
-func PathIsStreamUpdate(path string) bool {
+func PathIsStream(path string) bool {
 	parts := strings.Split(path, "/")
 	if len(parts) != 3 || parts[0] != "" || parts[1] != "stream" {
 		return false
@@ -50,9 +51,17 @@ func PathIsStreamUpdate(path string) bool {
 	return true
 }
 
-func PathIsStreamTranscoderUpdate(path string) bool {
+func PathIsStreamTranscoder(path string) bool {
 	parts := strings.Split(path, "/")
 	if len(parts) != 4 || parts[0] != "" || parts[1] != "stream" || parts[3] != "transcoder" {
+		return false
+	}
+	return true
+}
+
+func PathIsStreamSettings(path string) bool {
+	parts := strings.Split(path, "/")
+	if len(parts) != 4 || parts[0] != "" || parts[1] != "stream" || parts[3] != "settings" {
 		return false
 	}
 	return true
@@ -68,6 +77,10 @@ func StreamPath(name string) string {
 
 func StreamTranscoderPath(name string) string {
 	return path.Join(StreamPrefix, name, "transcoder")
+}
+
+func StreamSettingsPath(name string) string {
+	return path.Join(StreamSettingsPrefix, name)
 }
 
 func ServicePrefix(prefix string) string {

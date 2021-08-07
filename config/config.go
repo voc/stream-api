@@ -41,6 +41,11 @@ type MonitorConfig struct {
 	Address string `yaml:"address"`
 }
 
+type AuthConfig struct {
+	Enable  bool   `yaml:"enable"`
+	Address string `yaml:"address"`
+}
+
 type Config struct {
 	Network   Network
 	Sources   []SourceConfig

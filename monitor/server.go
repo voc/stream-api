@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
 )
 
@@ -18,6 +19,7 @@ type clientMap map[*websocket.Conn]bool
 type server struct {
 	upgrader websocket.Upgrader
 	done     sync.WaitGroup
+	api      client.RestAPI
 
 	// update channels
 	addClient    chan *websocket.Conn
@@ -32,7 +34,7 @@ type server struct {
 	state             map[string]interface{}
 }
 
-func newServer(ctx context.Context, updates <-chan map[string]interface{}, conf config.MonitorConfig) *server {
+func newServer(ctx context.Context, api client.RestAPI, updates <-chan map[string]interface{}, conf config.MonitorConfig) *server {
 	s := &server{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -43,6 +45,7 @@ func newServer(ctx context.Context, updates <-chan map[string]interface{}, conf 
 		addClient:    make(chan *websocket.Conn, 1),
 		removeClient: make(chan *websocket.Conn, 1),
 		state:        make(map[string]interface{}),
+		api:          api,
 	}
 	s.done.Add(1)
 	go s.run(ctx, &conf)
@@ -57,8 +60,11 @@ func (s *server) run(parentContext context.Context, conf *config.MonitorConfig) 
 	defer s.done.Done()
 
 	router := mux.NewRouter()
-	router.HandleFunc("/", indexHandler()).Methods("GET")
-	router.HandleFunc("/ws", s.wsHandler)
+	router.HandleFunc("/", handleIndex()).Methods("GET")
+	router.HandleFunc("/ws", s.handleWebsocket)
+	router.HandleFunc("/stream/settings", HandleGetAllStreamSettings(s.api)).Methods("GET")
+	router.HandleFunc("/stream/{slug}/settings", HandleGetStreamSettings(s.api)).Methods("GET")
+	router.HandleFunc("/stream/{slug}/settings", HandleSetStreamSettings(s.api)).Methods("POST")
 	router.PathPrefix("/").Handler(http.FileServer(http.FS(static)))
 
 	srv := &http.Server{Addr: conf.Address, Handler: router}
@@ -101,7 +107,7 @@ type templateData struct {
 	Errors []error
 }
 
-func indexHandler() http.HandlerFunc {
+func handleIndex() http.HandlerFunc {
 	data, err := static.ReadFile("frontend/public/index.html")
 	if err != nil {
 		log.Fatal().Err(err).Msg("index read")
@@ -127,7 +133,7 @@ func (s *server) broadcast(clients clientMap, v interface{}) {
 	}
 }
 
-func (s *server) wsHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	c, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("ws upgrade failed")

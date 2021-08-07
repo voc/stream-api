@@ -3,6 +3,7 @@ import commonjs from "@rollup/plugin-commonjs";
 import { babel } from "@rollup/plugin-babel";
 import replace from "@rollup/plugin-replace";
 import html from "@web/rollup-plugin-html";
+import json from "@rollup/plugin-json";
 
 import { terser } from "rollup-plugin-terser";
 
@@ -64,6 +65,7 @@ export default {
         require.resolve("@babel/plugin-syntax-import-meta"),
       ]
     }),
+    json(),
     html({
       publicPath: "/frontend/public/",
       extractAssets: true,

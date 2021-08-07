@@ -1,6 +1,6 @@
 import React from 'react';
 import {useSelector} from 'react-redux'
-import {selectFanouts} from './redux/select'
+import {selectFanouts} from '../redux/select'
 
 function FanoutItem(props) {
   const {fanout} = props;

@@ -199,9 +199,9 @@ func (t *Transcoder) handleStream(ctx context.Context, update *client.WatchUpdat
 		return
 	}
 
-	if client.PathIsStreamUpdate(path) {
+	if client.PathIsStream(path) {
 		t.handleStreamUpdate(ctx, name, update)
-	} else if client.PathIsStreamTranscoderUpdate(path) {
+	} else if client.PathIsStreamTranscoder(path) {
 		t.handleStreamTranscoder(ctx, name, update)
 	}
 }

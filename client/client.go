@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +16,6 @@ import (
 	"github.com/voc/stream-api/config"
 	"go.etcd.io/etcd/clientv3"
 )
-
-const requestTimeout = time.Second
 
 type LeaseID clientv3.LeaseID
 
@@ -31,6 +30,7 @@ type Client struct {
 	lease  clientv3.LeaseID
 	done   sync.WaitGroup
 	name   string
+	err    chan error
 }
 
 func NewClient(parentContext context.Context, cfg config.Network) *Client {
@@ -47,13 +47,17 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 			log.Fatal().Err(err).Msg("client: tls")
 		}
 	}
+	log.Info().Msgf("connecting to etcd: %v", cfg.Endpoints)
 	c, err := clientv3.New(clientv3.Config{
 		Endpoints: cfg.Endpoints,
 		TLS:       tlsConfig,
+		// DialKeepAliveTime: time.Second * 5,
+		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("client: new")
 	}
+	log.Info().Msgf("connected to etcd")
 
 	// minimum lease TTL is 5-second
 	resp, err := c.Grant(parentContext, 5)
@@ -65,6 +69,7 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 		client: c,
 		lease:  resp.ID,
 		name:   cfg.Name,
+		err:    make(chan error),
 	}
 
 	// keepalive and revoke lease on exit
@@ -77,21 +82,23 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 	return cli
 }
 
+func (client *Client) Errors() <-chan error {
+	return client.err
+}
+
 func (client *Client) run(ctx context.Context) {
-	for {
-		keepalive, err := client.client.KeepAlive(ctx, client.lease)
-		if err != nil {
-			log.Fatal().Err(err).Msg("client: keepalive")
-		}
-		log.Debug().Msg("client: running keepalive")
-		done := client.keepalive(ctx, keepalive)
-		if done {
-			return
-		}
+	keepalive, err := client.client.KeepAlive(ctx, client.lease)
+	if err != nil {
+		log.Fatal().Err(err).Msg("client: keepalive")
+	}
+	log.Debug().Msg("client: running keepalive")
+	err = client.keepalive(ctx, keepalive)
+	if err != nil {
+		client.err <- err
 	}
 }
 
-func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.LeaseKeepAliveResponse) bool {
+func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.LeaseKeepAliveResponse) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -105,11 +112,10 @@ func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.
 			if err != nil {
 				log.Error().Err(err).Msg("client: close")
 			}
-			return true
+			return nil
 		case _, ok := <-keepalive:
 			if !ok {
-				log.Error().Msg("client: keepalive stopped")
-				return false
+				return errors.New("keepalive stopped")
 			}
 		}
 	}
@@ -128,8 +134,14 @@ type PublishAPI interface {
 	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error)
 }
 
+type Field struct {
+	Key   []byte
+	Value []byte
+}
+
 type RestAPI interface {
 	Get(ctx context.Context, key string) ([]byte, error)
+	GetWithPrefix(ctx context.Context, prefix string) ([]Field, error)
 	Put(ctx context.Context, key string, value []byte) error
 }
 
@@ -162,7 +174,7 @@ func (client *Client) PublishWithLease(ctx context.Context, key string, value st
 	}
 
 	if !res.Succeeded {
-		return 0, errors.New("already exists")
+		return 0, fmt.Errorf("key %s already exists", key)
 	}
 
 	return LeaseID(resp.ID), nil
@@ -281,6 +293,22 @@ func (client *Client) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	return res.Kvs[0].Value, nil
+}
+
+func (client *Client) GetWithPrefix(ctx context.Context, prefix string) ([]Field, error) {
+	res, err := client.client.KV.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, err
+	}
+	var fields []Field
+	fmt.Println("huhu", res.Kvs)
+	for _, kv := range res.Kvs {
+		fields = append(fields, Field{
+			Key:   kv.Key,
+			Value: kv.Value,
+		})
+	}
+	return fields, nil
 }
 
 // GetServices fetches all service owners for a given service name

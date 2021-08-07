@@ -1,6 +1,6 @@
 import React from 'react';
-import {useSelector} from 'react-redux'
-import {selectSocketConnected} from './redux/select'
+import {useSelector, useDispatch} from 'react-redux'
+import {selectSocketConnected} from '../redux/select'
 
 function SocketState() {
   const connected = useSelector(selectSocketConnected);

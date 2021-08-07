@@ -3,13 +3,13 @@ import ReactDOM from 'react-dom'
 import {Provider} from 'react-redux'
 import store from './redux/store'
 import {updateState, socketConnected, socketDisconnected} from './redux/actions'
-import Monitor from './Monitor'
+import App from './App'
 import Socket from './lib/socket'
 
 const rootElement = document.getElementById('app')
 ReactDOM.render(
   <Provider store={store}>
-    <Monitor />
+    <App />
   </Provider>,
   rootElement
 )

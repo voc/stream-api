@@ -17,7 +17,7 @@ func New(ctx context.Context, conf config.MonitorConfig, api client.ServiceAPI) 
 	log.Debug().Msgf("monitor config %v", conf)
 	watcher := newWatcher(ctx, api)
 	m := &Monitor{
-		server: newServer(ctx, watcher.listen(), conf),
+		server: newServer(ctx, api, watcher.listen(), conf),
 	}
 
 	return m

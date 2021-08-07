@@ -1,6 +1,6 @@
 import React from 'react';
 import {useSelector} from 'react-redux'
-import {selectStreams, selectTranscoders, selectStreamTranscoders} from './redux/select'
+import {selectStreams, selectTranscoders, selectStreamTranscoders} from '../redux/select'
 import StreamItem from './StreamItem'
 
 function StreamList() {

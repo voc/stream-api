@@ -1,3 +1,37 @@
 :root {
   --card-back-color: white;
 }
+
+.container {
+  position: relative;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.spinnerOverlay {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+  top: 0;
+  background: rgba(255,255,255,0.7);
+
+  opacity: 1;
+  animation: fade 1s linear;
+}
+
+@keyframes fade {
+  0%,40% { opacity: 0 }
+  100% { opacity: 1 }
+}
+
+/* forms */
+.responsive-label {
+  align-items: center;
+}
+
+.responsive-label .col-md-3 {
+  text-align: right;
+}
