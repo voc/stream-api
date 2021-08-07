@@ -58,8 +58,10 @@ func NewIcecastScraper(conf config.SourceConfig) *IcecastSource {
 
 // scrape requests and parses data from the icecast server
 func (ics IcecastSource) Scrape(ctx context.Context) ([]*stream.Stream, error) {
-	req, err := http.NewRequest("GET", ics.conf.URL+"/status-json.xsl", nil)
-	req.WithContext(ctx)
+	req, err := http.NewRequestWithContext(ctx, "GET", ics.conf.URL+"/status-json.xsl", nil)
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

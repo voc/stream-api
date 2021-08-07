@@ -40,8 +40,10 @@ func (srs SrtSource) Scrape(ctx context.Context) ([]*stream.Stream, error) {
 
 // getStats requests status data from icecast2
 func (srs SrtSource) getStats(ctx context.Context, url string) ([]*srtStream, error) {
-	req, err := http.NewRequest("GET", url+"/streams", nil)
-	req.WithContext(ctx)
+	req, err := http.NewRequestWithContext(ctx, "GET", url+"/streams", nil)
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

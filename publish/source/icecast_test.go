@@ -3,6 +3,8 @@ package source
 import (
 	"reflect"
 	"testing"
+
+	"github.com/voc/stream-api/stream"
 )
 
 func Test_icecastSource(t *testing.T) {
@@ -16,7 +18,7 @@ func Test_icecastSource(t *testing.T) {
 	}
 	streams := source.mapStreams(iceStreams)
 
-	expected := []Stream{
+	expected := []*stream.Stream{
 		{Format: "matroska", Source: "http://ingest.c3voc.de:8000/q1", Slug: "q1"},
 	}
 	if !reflect.DeepEqual(streams, expected) {
