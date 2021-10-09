@@ -1,5 +1,7 @@
 # stream-api
-Distributed media stream processing
+Distributed media stream processing using an etcd backend.
+
+The goal is coordinating live stream transcoding and monitoring across multiple machines in a fault-tolerant manner.
 
 ## Build
 ### Build Dependencies
