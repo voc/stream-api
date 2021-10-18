@@ -16,10 +16,17 @@
   height: 100%;
   width: 100%;
   top: 0;
-  background: rgba(255,255,255,0.7);
+  background: rgba(255,255,255,0.9);
+  z-index: 1000;
 
   opacity: 1;
   animation: fade 1s linear;
+}
+
+.spinnerOverlay .spinner {
+  position: fixed;
+  top: 50%;
+  margin-top: -0.625rem;
 }
 
 @keyframes fade {
