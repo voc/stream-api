@@ -17,15 +17,19 @@ require (
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/schema v1.1.0
 	github.com/gorilla/websocket v1.4.2
-	github.com/json-iterator/go v1.1.9 // indirect
+	github.com/minio/pkg v1.1.5 // indirect
 	github.com/modern-go/reflect2 v1.0.1 // indirect
+	github.com/pelletier/go-toml v1.9.4 // indirect
 	github.com/pkg/errors v0.9.1
+	github.com/quangngotan95/go-m3u8 v0.1.0 // indirect
 	github.com/rs/zerolog v1.23.0
+	github.com/zencoder/go-dash v0.0.0-20201006100653-2f93b14912b2 // indirect
 	go.etcd.io/etcd v3.3.25+incompatible
 	go.uber.org/atomic v1.8.0 // indirect
 	go.uber.org/multierr v1.7.0 // indirect
 	go.uber.org/tools v0.0.0-20190618225709-2cfd321de3ee // indirect
 	go.uber.org/zap v1.17.0 // indirect
+	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519 // indirect
 	golang.org/x/net v0.0.0-20210614182718-04defd469f4e // indirect
 	golang.org/x/sys v0.0.0-20210616094352-59db8d763f22 // indirect
 	google.golang.org/genproto v0.0.0-20210617175327-b9e0b3197ced // indirect
