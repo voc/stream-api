@@ -3,6 +3,9 @@ package upload
 import (
 	"io/ioutil"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/minio/pkg/wildcard"
 	"github.com/pelletier/go-toml"
@@ -12,7 +15,11 @@ import (
 type Auth interface {
 	// Auth checks whether the user has access to the passed relative path
 	// Note: doesn't check whether the path is actually relative
-	Auth(user string, pass string, path string) bool
+	Auth(user string, pass string, path string) (string, bool)
+}
+
+type GlobalConfig struct {
+	AllowedDirs []string `toml:"allowedDirs"`
 }
 
 type AuthConfigEntry struct {
@@ -22,11 +29,13 @@ type AuthConfigEntry struct {
 }
 
 type AuthConfig struct {
-	Auth []AuthConfigEntry
+	Global GlobalConfig
+	Auth   []AuthConfigEntry
 }
 
 type StaticAuth struct {
-	conf map[string]AuthConfigEntry
+	allowedDirs []string
+	conf        map[string]AuthConfigEntry
 }
 
 func NewStaticAuth(configPath string) (Auth, error) {
@@ -42,7 +51,8 @@ func NewStaticAuth(configPath string) (Auth, error) {
 	log.Println("read auth from", configPath)
 
 	a := &StaticAuth{
-		conf: make(map[string]AuthConfigEntry),
+		allowedDirs: conf.Global.AllowedDirs,
+		conf:        make(map[string]AuthConfigEntry),
 	}
 	for _, entry := range conf.Auth {
 		a.conf[entry.User] = entry
@@ -50,14 +60,42 @@ func NewStaticAuth(configPath string) (Auth, error) {
 	return a, nil
 }
 
-func (a *StaticAuth) Auth(user string, pass string, path string) bool {
+func (a *StaticAuth) Auth(user string, pass string, path string) (string, bool) {
 	entry, ok := a.conf[user]
 	if !ok {
-		return false
+		return "", false
 	}
 	err := bcrypt.CompareHashAndPassword([]byte(entry.Pass), []byte(pass))
 	if err != nil {
-		return false
+		return "", false
 	}
-	return wildcard.MatchSimple(entry.Match, path)
+
+	// split path
+	cleanedPath := filepath.Clean(path)
+
+	// check path for allowed prefixes
+	found := false
+	for _, prefix := range a.allowedDirs {
+		if strings.HasPrefix(cleanedPath, prefix) {
+			found = true
+			cleanedPath = cleanedPath[len(prefix):]
+			break
+		}
+	}
+	if !found {
+		return "", false
+	}
+	if !filepath.IsAbs(cleanedPath) {
+		cleanedPath = string(os.PathSeparator) + cleanedPath
+	}
+
+	// match against entry
+	if !wildcard.MatchSimple(entry.Match, cleanedPath) {
+		return "", false
+	}
+
+	// determine slug
+	parts := strings.Split(cleanedPath, string(os.PathSeparator))
+	slug := parts[1]
+	return slug, true
 }

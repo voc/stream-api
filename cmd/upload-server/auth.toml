@@ -1,3 +1,6 @@
+[global]
+allowedDirs = ["/hls", "/dash", "/thumbnail"]
+
 [[auth]]
 user = "foo"
 pass = "$2b$12$7.hY.F2069fGq0pszxwFF.jxN1zB6K7U6yBa3V1/TYQrFcPUsyp5."

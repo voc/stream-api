@@ -88,7 +88,8 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// register path-timeout
 	// -> cleanup if path times out
 
-	if !s.authenticate(w, r) {
+	slug, ok := s.authenticate(w, r)
+	if !ok {
 		w.WriteHeader(401)
 		io.WriteString(w, "Unauthorized")
 		return
@@ -112,13 +113,16 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		defer file.Close()
 
+		// add path to registry
+		s.registry.AddFile(slug, path)
+
 		switch ext {
 		case ".m3u8":
 			fallthrough
 		case ".mpd":
-			err = s.HandlePlaylist(r.Body, file, r.URL.Path)
+			err = s.HandlePlaylist(r.Body, file, r.URL.Path, slug)
 		default:
-			err = s.HandleSegment(r.Body, file, r.URL.Path)
+			err = s.HandleSegment(r.Body, file, r.URL.Path, slug)
 		}
 		if err != nil {
 			fail(w, err)
@@ -136,7 +140,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) HandlePlaylist(body io.Reader, output io.Writer, path string) error {
+func (s *Server) HandlePlaylist(body io.Reader, output io.Writer, path string, slug string) error {
 	var buf bytes.Buffer
 	writer := io.MultiWriter(&buf, output)
 	_, err := io.Copy(writer, body)
@@ -145,16 +149,13 @@ func (s *Server) HandlePlaylist(body io.Reader, output io.Writer, path string) e
 	}
 
 	// parse playlist
-	dir := filepath.Dir(path)
-	slug := filepath.Base(dir)
 	ext := filepath.Ext(path)
-	// var paths []string
 	var interval time.Duration
 	switch ext {
 	case ".m3u8":
-		_, interval, err = s.parser.parseHLSPlaylist(&buf, dir)
+		interval, err = s.parser.parseHLSPlaylist(&buf)
 	case ".mpd":
-		_, interval, err = s.parser.parseDashManifest(&buf, dir)
+		interval, err = s.parser.parseDashManifest(&buf)
 	default:
 		log.Fatal("unknown playlist extension", ext)
 	}
@@ -164,70 +165,47 @@ func (s *Server) HandlePlaylist(body io.Reader, output io.Writer, path string) e
 	}
 
 	// refresh stream registration
-
-	s.registry.Keepalive(slug, nil, interval*2)
+	s.registry.Keepalive(slug, interval*2)
 
 	return nil
 }
 
-func (s *Server) HandleSegment(body io.Reader, output io.Writer, path string) error {
+func (s *Server) HandleSegment(body io.Reader, output io.Writer, path string, slug string) error {
 	_, err := io.Copy(output, body)
-
-	// add path to registry
-	// slug := filepath.Base(filepath.Dir(path))
-	// s.registry.AddFile(slug, path)
 	return err
 }
 
 // Authenticate using basic auth
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (string, bool) {
 	w.Header().Add("WWW-Authenticate", `Basic realm=upload, charset="UTF-8"`)
 	auth := strings.Trim(r.Header.Get("Authorization"), "\n")
 	if len(auth) > 6 && strings.ToLower(auth[:6]) != "basic " {
-		return false
+		return "", false
 	}
 	split := strings.Split(auth, " ")
 	if len(split) != 2 {
-		return false
+		return "", false
 	}
 	buf := bytes.NewBuffer([]byte(split[1]))
 	rd := base64.NewDecoder(base64.StdEncoding, buf)
 	res, err := io.ReadAll(rd)
 	if err != nil {
-		return false
+		return "", false
 	}
 	split = strings.Split(strings.ReplaceAll(string(res), "\n", ""), ":")
 	if len(split) != 2 {
-		return false
+		return "", false
 	}
-	ret := s.auth.Auth(split[0], split[1], r.URL.Path)
+	slug, ret := s.auth.Auth(split[0], split[1], r.URL.Path)
 	// log.Println("split", split[0], split[1], ret)
-	return ret
+	return slug, ret
 }
 
-// cleanup removes a stream or single stream-segment
-func (s *Server) cleanup(slug string, path *string) {
-	// remove whole directory
-	streamPath := filepath.Join(s.storePath, slug)
-	if path == nil {
-		log.Println("remove dir", streamPath)
-		err := os.RemoveAll(streamPath)
-		if err != nil {
-			log.Println("remove stream:", err)
-		}
-		return
+// cleanup removes a stream directory
+func (s *Server) cleanup(slug string, path string) {
+	log.Println("remove dir", path)
+	err := os.RemoveAll(path)
+	if err != nil {
+		log.Println("remove dir:", err)
 	}
-
-	// just a sanity check
-	// if !strings.HasPrefix(*path, "/"+slug+"/") {
-	// 	log.Printf("attempted to remove %s not belonging to slug %s", *path, slug)
-	// 	return
-	// }
-
-	// filePath := filepath.Join(s.storePath, *path)
-	// log.Println("remove file", filePath)
-	// err := os.Remove(filePath)
-	// if err != nil {
-	// 	log.Println("remove:", err)
-	// }
 }

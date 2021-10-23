@@ -3,14 +3,14 @@ package upload
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 type registration struct {
-	ttl     time.Duration
-	timeout time.Duration
-	files   map[string]time.Duration // uploaded files with expirations
+	ttl         time.Duration
+	directories map[string]bool // directories
 }
 
 // Registry tracks the lifetime of uploaded streams and stream segments
@@ -23,7 +23,7 @@ type Registry struct {
 	callback CleanupFunc
 }
 
-type CleanupFunc func(slug string, path *string)
+type CleanupFunc func(slug string, path string)
 
 func NewRegistry(ctx context.Context, callback CleanupFunc) *Registry {
 	r := &Registry{
@@ -44,8 +44,7 @@ func NewRegistry(ctx context.Context, callback CleanupFunc) *Registry {
 				// cleanup all
 				r.mutex.Lock()
 				for slug := range r.data {
-					r.callback(slug, nil)
-					delete(r.data, slug)
+					r.removeStream(slug)
 				}
 				r.mutex.Unlock()
 				return
@@ -65,26 +64,10 @@ func (r *Registry) timeout() {
 	for slug, entry := range r.data {
 		entry.ttl -= r.interval
 		if entry.ttl <= 0 {
-			r.callback(slug, nil)
-			delete(r.data, slug)
-			continue
+			r.removeStream(slug)
 		}
-		for path, lifetime := range entry.files {
-			lifetime -= r.interval
-			// log.Println("check", slug, path, lifetime)
-			if lifetime <= 0 {
-				r.callback(slug, &path)
-				delete(entry.files, path)
-				continue
-			}
-			// update lifetime
-			entry.files[path] = lifetime
-		}
-	}
-}
 
-func (r *Registry) Wait() {
-	r.done.Wait()
+	}
 }
 
 // add new stream to registry
@@ -92,10 +75,28 @@ func (r *Registry) Wait() {
 func (r *Registry) addStream(slug string) {
 	log.Println("registering stream", slug)
 	r.data[slug] = &registration{
-		ttl:     time.Second * 10, // initial timeout
-		timeout: time.Second * 10,
-		files:   make(map[string]time.Duration),
+		ttl:         time.Second * 10, // initial timeout
+		directories: make(map[string]bool),
 	}
+}
+
+// remove tracked stream
+// lock must be held by caller
+func (r *Registry) removeStream(slug string) {
+	log.Println("removing stream", slug)
+	entry, ok := r.data[slug]
+	if !ok {
+		return
+	}
+	for dir := range entry.directories {
+		r.callback(slug, dir)
+	}
+	delete(r.data, slug)
+}
+
+// Wait for registry to stop
+func (r *Registry) Wait() {
+	r.done.Wait()
 }
 
 // Addfile adds a path to track for a certain stream
@@ -108,13 +109,13 @@ func (r *Registry) AddFile(slug string, path string) error {
 		r.addStream(slug)
 		reg = r.data[slug]
 	}
-	reg.files[path] = reg.timeout
-	log.Println("add file ", path, reg.timeout)
+	dir := filepath.Dir(path)
+	reg.directories[dir] = true
 	return nil
 }
 
-// Keepalive extends the lifetime of a stream and its files
-func (r *Registry) Keepalive(slug string, paths []string, timeout time.Duration) {
+// Keepalive extends the lifetime of a stream and its directories
+func (r *Registry) Keepalive(slug string, timeout time.Duration) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	_, ok := r.data[slug]
@@ -122,11 +123,7 @@ func (r *Registry) Keepalive(slug string, paths []string, timeout time.Duration)
 		r.addStream(slug)
 	}
 
-	// Refresh lifetimes
+	// Refresh lifetime
 	reg := r.data[slug]
 	reg.ttl = timeout
-	reg.timeout = timeout
-	for _, path := range paths {
-		reg.files[path] = timeout
-	}
 }
