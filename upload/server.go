@@ -165,7 +165,9 @@ func (s *Server) HandlePlaylist(body io.Reader, output io.Writer, path string, s
 	}
 
 	// refresh stream registration
-	s.registry.Keepalive(slug, interval*2)
+	if interval > 0 {
+		s.registry.Keepalive(slug, interval*4)
+	}
 
 	return nil
 }
