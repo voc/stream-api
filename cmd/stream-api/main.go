@@ -96,7 +96,7 @@ func main() {
 	// connect to etcd
 	cfg.Network.Name = name
 	log.Debug().Interface("config", cfg.Network).Msgf("Creating client")
-	cli := client.NewClient(cliCtx, cfg.Network)
+	cli := client.NewConsulClient(cliCtx, cfg.Network)
 
 	// setup service context
 	ctx, cancel := context.WithCancel(context.Background())

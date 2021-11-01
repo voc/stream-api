@@ -33,7 +33,7 @@ type Client struct {
 	err    chan error
 }
 
-func NewClient(parentContext context.Context, cfg config.Network) *Client {
+func NewEtcdClient(parentContext context.Context, cfg config.Network) *Client {
 	var tlsConfig *tls.Config
 	if cfg.TLS != nil {
 		tlsInfo := transport.TLSInfo{
@@ -47,7 +47,7 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 			log.Fatal().Err(err).Msg("client: tls")
 		}
 	}
-	log.Info().Msgf("connecting to etcd: %v", cfg.Endpoints)
+	log.Info().Msg("client: connecting to etcd")
 	c, err := clientv3.New(clientv3.Config{
 		Endpoints: cfg.Endpoints,
 		TLS:       tlsConfig,
@@ -57,10 +57,10 @@ func NewClient(parentContext context.Context, cfg config.Network) *Client {
 	if err != nil {
 		log.Fatal().Err(err).Msg("client: new")
 	}
-	log.Info().Msgf("connected to etcd")
+	log.Info().Msgf("client: waiting for lease")
 
 	// minimum lease TTL is 5-second
-	resp, err := c.Grant(parentContext, 5)
+	resp, err := c.Grant(parentContext, 10)
 	if err != nil {
 		log.Fatal().Err(err).Msg("grant")
 	}
@@ -123,38 +123,6 @@ func (client *Client) keepalive(ctx context.Context, keepalive <-chan *clientv3.
 
 func (client *Client) Wait() {
 	client.done.Wait()
-}
-
-type WatchAPI interface {
-	Watch(ctx context.Context, prefix string) (UpdateChan, error)
-}
-
-type PublishAPI interface {
-	PublishService(ctx context.Context, service string, data string) error
-	PublishWithLease(ctx context.Context, key string, value string, ttl time.Duration) (LeaseID, error)
-}
-
-type Field struct {
-	Key   []byte
-	Value []byte
-}
-
-type RestAPI interface {
-	Get(ctx context.Context, key string) ([]byte, error)
-	GetWithPrefix(ctx context.Context, prefix string) ([]Field, error)
-	Put(ctx context.Context, key string, value []byte) error
-}
-
-type KeepaliveAPI interface {
-	RefreshLease(ctx context.Context, id LeaseID) error
-	RevokeLease(ctx context.Context, id LeaseID) error
-}
-
-type ServiceAPI interface {
-	WatchAPI
-	PublishAPI
-	KeepaliveAPI
-	RestAPI
 }
 
 // publishWithLease publishes a key with a new lease if the key doesn't exist yet
@@ -301,7 +269,7 @@ func (client *Client) GetWithPrefix(ctx context.Context, prefix string) ([]Field
 		return nil, err
 	}
 	var fields []Field
-	fmt.Println("huhu", res.Kvs)
+	// fmt.Println("huhu", res.Kvs)
 	for _, kv := range res.Kvs {
 		fields = append(fields, Field{
 			Key:   kv.Key,
