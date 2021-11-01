@@ -44,6 +44,7 @@ func NewServer(ctx context.Context, addr string, path string, auth Auth) *Server
 
 	// set routes
 	mux.HandleFunc("/", s.HandleUpload)
+	mux.HandleFunc("/health", s.HandleHealth)
 
 	// run server
 	s.done.Add(1)
@@ -77,6 +78,10 @@ func (s *Server) Wait() {
 // The channel returned by Errors is pushed fatal errors
 func (s *Server) Errors() <-chan error {
 	return s.errors
+}
+
+func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	io.WriteString(w, "ok")
 }
 
 // do delete ourselves as delete doesnt work...
