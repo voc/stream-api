@@ -32,7 +32,7 @@ func decodeJSON(rd io.Reader, out interface{}) error {
 	return nil
 }
 
-func HandleGetAllStreamSettings(api client.RestAPI) http.HandlerFunc {
+func HandleGetAllStreamSettings(api client.KVAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		params := mux.Vars(r)
 		slug := params["slug"]
@@ -64,7 +64,7 @@ func HandleGetAllStreamSettings(api client.RestAPI) http.HandlerFunc {
 	}
 }
 
-func HandleGetStreamSettings(api client.RestAPI) http.HandlerFunc {
+func HandleGetStreamSettings(api client.KVAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		params := mux.Vars(r)
 		slug := params["slug"]
@@ -83,7 +83,7 @@ func HandleGetStreamSettings(api client.RestAPI) http.HandlerFunc {
 	}
 }
 
-func HandleSetStreamSettings(api client.RestAPI) http.HandlerFunc {
+func HandleSetStreamSettings(api client.KVAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var settings stream.Settings

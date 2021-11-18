@@ -2,6 +2,7 @@ package config
 
 import (
 	"io/ioutil"
+	"time"
 
 	"gopkg.in/yaml.v2"
 )
@@ -21,6 +22,13 @@ type Network struct {
 type SourceConfig struct {
 	Type string `yaml:"type"`
 	URL  string `yaml:"url"`
+}
+
+type PublisherConfig struct {
+	Enable   bool           `yaml:"enable"`
+	Sources  []SourceConfig `yaml:"sources"`
+	Interval time.Duration  `yaml:"interval"`
+	Timeout  time.Duration  `yaml:"timeout"`
 }
 
 type TranscodeConfig struct {
@@ -48,7 +56,7 @@ type AuthConfig struct {
 
 type Config struct {
 	Network   Network
-	Sources   []SourceConfig
+	Publisher PublisherConfig
 	Transcode TranscodeConfig
 	Fanout    FanoutConfig
 	Monitor   MonitorConfig
@@ -56,7 +64,13 @@ type Config struct {
 
 // Parse parses the config from a yaml file at path
 func Parse(path string) (Config, error) {
-	cfg := Config{}
+	// default config
+	cfg := Config{
+		Publisher: PublisherConfig{
+			Interval: time.Second * 3,
+			Timeout:  time.Second * 15,
+		},
+	}
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return cfg, err

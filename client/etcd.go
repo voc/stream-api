@@ -11,10 +11,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/mvcc/mvccpb"
 	"github.com/coreos/etcd/pkg/transport"
 	"github.com/voc/stream-api/config"
-	"go.etcd.io/etcd/clientv3"
 )
 
 type LeaseID clientv3.LeaseID
@@ -148,17 +148,28 @@ func (client *Client) PublishWithLease(ctx context.Context, key string, value st
 	return LeaseID(resp.ID), nil
 }
 
-const (
-	UpdateTypeDelete = clientv3.EventTypeDelete
-	UpdateTypePut    = clientv3.EventTypePut
-)
-
-type WatchUpdate struct {
-	Type mvccpb.Event_EventType
-	KV   *mvccpb.KeyValue
+type EtcdKV struct {
+	kv *mvccpb.KeyValue
 }
 
-type UpdateChan chan []*WatchUpdate
+func (e *EtcdKV) Key() string {
+	return string(e.kv.Key)
+}
+
+func (e *EtcdKV) Value() []byte {
+	return e.kv.Value
+}
+
+func convertUpdateType(et mvccpb.Event_EventType) UpdateType {
+	switch et {
+	case mvccpb.DELETE:
+		return UpdateTypeDelete
+	case mvccpb.PUT:
+		fallthrough
+	default:
+		return UpdateTypePut
+	}
+}
 
 // watch prefix and receive current state
 func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, error) {
@@ -178,7 +189,7 @@ func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, err
 	for _, item := range resp.Kvs {
 		updates = append(updates, &WatchUpdate{
 			Type: UpdateTypePut,
-			KV:   item,
+			KV:   &EtcdKV{kv: item},
 		})
 	}
 	lastRev := resp.Header.Revision
@@ -216,8 +227,8 @@ func (client *Client) Watch(ctx context.Context, prefix string) (UpdateChan, err
 				}
 				for _, event := range change.Events {
 					updates = append(updates, &WatchUpdate{
-						Type: event.Type,
-						KV:   event.Kv,
+						Type: convertUpdateType(event.Type),
+						KV:   &EtcdKV{kv: event.Kv},
 					})
 				}
 				lastRev = change.Header.Revision

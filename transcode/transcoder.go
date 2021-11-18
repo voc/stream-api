@@ -160,7 +160,7 @@ func (t *Transcoder) publishStatus(ctx context.Context) {
 		log.Error().Err(err).Msg("transcoder marshal")
 		return
 	}
-	t.api.PublishService(ctx, "transcoder", string(data))
+	t.api.PutWithSession(ctx, "transcoder", data)
 }
 
 // handleTranscoder handles an etcd transcoder update
@@ -168,7 +168,7 @@ func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
 	}
-	name := client.ParseServiceName(string(update.KV.Key))
+	name := client.ParseServiceName(string(update.KV.Key()))
 	if name == "" {
 		return
 	}
@@ -176,7 +176,7 @@ func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
 	switch update.Type {
 	case client.UpdateTypePut:
 		var status TranscoderStatus
-		err := json.Unmarshal(update.KV.Value, &status)
+		err := json.Unmarshal(update.KV.Value(), &status)
 		if err != nil {
 			log.Error().Err(err).Msg("transcoder unmarshal")
 			return
@@ -193,7 +193,7 @@ func (t *Transcoder) handleStream(ctx context.Context, update *client.WatchUpdat
 	if update.KV == nil {
 		return
 	}
-	path := string(update.KV.Key)
+	path := string(update.KV.Key())
 	name := client.ParseStreamName(path)
 	if name == "" {
 		return
@@ -211,7 +211,7 @@ func (t *Transcoder) handleStreamUpdate(ctx context.Context, key string, update 
 	switch update.Type {
 	case client.UpdateTypePut:
 		var str stream.Stream
-		err := json.Unmarshal(update.KV.Value, &str)
+		err := json.Unmarshal(update.KV.Value(), &str)
 		if err != nil {
 			log.Error().Err(err).Msg("stream unmarshal")
 			return
@@ -233,7 +233,7 @@ func (t *Transcoder) handleStreamUpdate(ctx context.Context, key string, update 
 func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, update *client.WatchUpdate) {
 	switch update.Type {
 	case client.UpdateTypePut:
-		t.streamTranscoders[key] = string(update.KV.Value)
+		t.streamTranscoders[key] = string(update.KV.Value())
 	case client.UpdateTypeDelete:
 		delete(t.streamTranscoders, key)
 
@@ -276,13 +276,13 @@ func (t *Transcoder) shouldClaim() bool {
 // claimStream claims a stream for the current transcoder
 func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
 	key := client.StreamTranscoderPath(s.Slug)
-	lease, err := t.api.PublishWithLease(ctx, key, t.name, transcoderTTL)
+	err := t.api.PutWithSession(ctx, key, []byte(t.name))
 	if err != nil {
 		log.Error().Err(err).Msgf("transcoder/claim: %s", s.Slug)
 		return
 	}
 	log.Info().Msgf("transcoder: claimed %s", s.Slug)
-	service, err := t.createService(ctx, s, lease)
+	service, err := t.createService(ctx, s)
 	if err != nil {
 		log.Error().Err(err).Msgf("transcoder/claim: service %s", s.Slug)
 	}
@@ -298,7 +298,7 @@ transcoding_source={{ .Source }}
 transcoding_sink={{ index .Sinks 0 }}
 `))
 
-func (t *Transcoder) createService(ctx context.Context, s *stream.Stream, lease client.LeaseID) (*systemd.Service, error) {
+func (t *Transcoder) createService(ctx context.Context, s *stream.Stream) (*systemd.Service, error) {
 	type StreamConfig struct {
 		Slug       string
 		Format     string
@@ -308,10 +308,11 @@ func (t *Transcoder) createService(ctx context.Context, s *stream.Stream, lease 
 	}
 	var buf bytes.Buffer
 	err := configTemplate.Execute(&buf, &StreamConfig{
-		Slug:   s.Slug,
-		Format: s.Format,
-		Source: s.Source,
-		Sinks:  []string{t.sink},
+		Slug:       s.Slug,
+		Format:     s.Format,
+		Source:     s.Source,
+		Sinks:      []string{t.sink},
+		OutputType: "direct",
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("transcoder: templateConfig")
@@ -321,9 +322,5 @@ func (t *Transcoder) createService(ctx context.Context, s *stream.Stream, lease 
 		Config:     buf.Bytes(),
 		ConfigPath: path.Join(t.configPath, s.Slug),
 		UnitName:   fmt.Sprintf("transcode@%s.target", s.Slug),
-
-		Lease: lease,
-		API:   t.api,
-		TTL:   transcoderTTL,
 	})
 }

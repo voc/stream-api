@@ -108,6 +108,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		err := os.MkdirAll(dir, 0755)
 		if err != nil {
 			fail(w, fmt.Errorf("mkdir: %w", err))
+			return
 		}
 		// log.Println("allow", r.Method, r.URL.Path)
 
@@ -186,6 +187,7 @@ func (s *Server) HandleSegment(body io.Reader, output io.Writer, path string, sl
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (string, bool) {
 	w.Header().Add("WWW-Authenticate", `Basic realm=upload, charset="UTF-8"`)
 	auth := strings.Trim(r.Header.Get("Authorization"), "\n")
+	log.Println("auth", auth, r.URL.Path)
 	if len(auth) > 6 && strings.ToLower(auth[:6]) != "basic " {
 		return "", false
 	}

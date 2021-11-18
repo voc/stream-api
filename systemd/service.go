@@ -50,12 +50,12 @@ func NewService(parentContext context.Context, conf *ServiceConfig) (*Service, e
 	}
 	s.stopped.Store(false)
 	s.done.Add(1)
-	go s.run(ctx)
+	go s.Run(ctx)
 	return s, nil
 }
 
 // run starts the services maintenance loop
-func (s *Service) run(ctx context.Context) {
+func (s *Service) Run(ctx context.Context) {
 	defer s.done.Done()
 	defer s.stopped.Store(true)
 	defer s.cancel()
@@ -134,7 +134,7 @@ func (s *Service) deployConfig() bool {
 
 	// read old file for comparison
 	oldConf, err := ioutil.ReadFile(s.conf.ConfigPath)
-	if err == nil && bytes.Compare(oldConf, newConf) == 0 {
+	if err == nil && bytes.Equal(oldConf, newConf) {
 		return false
 	}
 

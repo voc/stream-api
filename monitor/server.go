@@ -19,7 +19,7 @@ type clientMap map[*websocket.Conn]bool
 type server struct {
 	upgrader websocket.Upgrader
 	done     sync.WaitGroup
-	api      client.RestAPI
+	api      client.KVAPI
 
 	// update channels
 	addClient    chan *websocket.Conn
@@ -34,7 +34,7 @@ type server struct {
 	state             map[string]interface{}
 }
 
-func newServer(ctx context.Context, api client.RestAPI, updates <-chan map[string]interface{}, conf config.MonitorConfig) *server {
+func newServer(ctx context.Context, api client.KVAPI, updates <-chan map[string]interface{}, conf config.MonitorConfig) *server {
 	s := &server{
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {

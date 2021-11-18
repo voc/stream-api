@@ -16,8 +16,6 @@ import (
 	"github.com/Showmax/go-fqdn"
 	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
-	"github.com/voc/stream-api/fanout"
-	"github.com/voc/stream-api/monitor"
 	"github.com/voc/stream-api/publish"
 	"github.com/voc/stream-api/transcode"
 )
@@ -96,7 +94,10 @@ func main() {
 	// connect to etcd
 	cfg.Network.Name = name
 	log.Debug().Interface("config", cfg.Network).Msgf("Creating client")
-	cli := client.NewConsulClient(cliCtx, cfg.Network)
+	cli, err := client.NewConsulClient(cliCtx, cfg.Network)
+	if err != nil {
+		log.Fatal().Err(err).Msg("client:")
+	}
 
 	// setup service context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,15 +120,15 @@ func main() {
 	}()
 
 	// setup monitor
-	if cfg.Monitor.Enable {
-		log.Debug().Msgf("Creating monitor %v", cfg.Monitor)
-		services = append(services, monitor.New(ctx, cfg.Monitor, cli))
-	}
+	// if cfg.Monitor.Enable {
+	// 	log.Debug().Msgf("Creating monitor %v", cfg.Monitor)
+	// 	services = append(services, monitor.New(ctx, cfg.Monitor, cli))
+	// }
 
 	// setup publisher
-	if len(cfg.Sources) > 0 {
-		log.Debug().Msgf("Creating publisher %v", cfg.Sources)
-		services = append(services, publish.New(ctx, cfg.Sources, cli, name))
+	if cfg.Publisher.Enable {
+		log.Debug().Msgf("Creating publisher %v", cfg.Publisher)
+		services = append(services, publish.New(ctx, &cfg.Publisher, cli, name))
 	}
 
 	// setup transcoder
@@ -136,11 +137,11 @@ func main() {
 		services = append(services, transcode.New(ctx, cfg.Transcode, cli, name))
 	}
 
-	// setup fanout
-	if cfg.Fanout.Enable {
-		log.Debug().Msgf("Creating fanout %v", cfg.Fanout)
-		services = append(services, fanout.New(ctx, cfg.Fanout, cli, name))
-	}
+	// // setup fanout
+	// if cfg.Fanout.Enable {
+	// 	log.Debug().Msgf("Creating fanout %v", cfg.Fanout)
+	// 	services = append(services, fanout.New(ctx, cfg.Fanout, cli, name))
+	// }
 
 	// Wait for graceful shutdown
 	<-ctx.Done()
@@ -149,6 +150,5 @@ func main() {
 	}
 	cliCancel()
 	log.Debug().Msgf("exitcode: %d", exitCode)
-	cli.Wait()
 	os.Exit(exitCode)
 }

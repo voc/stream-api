@@ -25,14 +25,12 @@ require (
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20201229170055-e5319fda7802 // indirect
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
 	github.com/zencoder/go-dash v0.0.0-20201006100653-2f93b14912b2
-	go.etcd.io/etcd v3.3.27+incompatible
 	golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac // indirect
 	gopkg.in/yaml.v2 v2.4.0
 )
 
 replace github.com/coreos/go-systemd => github.com/coreos/go-systemd/v22 v22.0.0
-
 replace github.com/coreos/bbolt => go.etcd.io/bbolt v1.3.5
-
+replace github.com/coreos/etcd => go.etcd.io/etcd v3.3.27+incompatible
 replace google.golang.org/grpc => google.golang.org/grpc v1.26.0
