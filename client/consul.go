@@ -109,6 +109,7 @@ func (cc *ConsulClient) Watch(ctx context.Context, prefix string) (UpdateChan, e
 	if err != nil {
 		return nil, err
 	}
+	log.Debug().Str("prefix", prefix).Msg("watch")
 	ch := make(UpdateChan)
 	plan.HybridHandler = cc.makeWatchHandler(ch)
 
@@ -129,17 +130,25 @@ func (cc *ConsulClient) Watch(ctx context.Context, prefix string) (UpdateChan, e
 // handleWatch updates the cache on consul changes
 func (cc *ConsulClient) makeWatchHandler(ch UpdateChan) watch.HybridHandlerFunc {
 	return func(b watch.BlockingParamVal, update interface{}) {
-		pair, ok := update.(*api.KVPair)
-		if !ok {
+		switch val := update.(type) {
+		case *api.KVPair:
+			if val == nil {
+				return
+			}
+			ch <- []*WatchUpdate{{
+				KV: &ConsulKV{kv: val},
+			}}
+		case api.KVPairs:
+			update := make([]*WatchUpdate, 0, len(val))
+			for _, pair := range val {
+				update = append(update, &WatchUpdate{
+					KV: &ConsulKV{kv: pair},
+				})
+			}
+			ch <- update
+		default:
 			log.Error().Msg("watch: invalid update")
-			return
 		}
-		if pair == nil {
-			return
-		}
-		ch <- []*WatchUpdate{{
-			KV: &ConsulKV{kv: pair},
-		}}
 	}
 }
 
@@ -153,6 +162,14 @@ func (cc *ConsulClient) Put(ctx context.Context, key string, value []byte) error
 }
 
 // kv put with expiring session
+type ErrAlreadyAquired struct {
+	Key string
+}
+
+func (e *ErrAlreadyAquired) Error() string {
+	return fmt.Sprintf("key %s already aquired", e.Key)
+}
+
 func (cc *ConsulClient) PutWithSession(ctx context.Context, key string, value []byte) error {
 	p := &api.KVPair{Key: key, Value: value, Session: cc.sessionId}
 	opts, cancel := optsWithTimeout(ctx, time.Second)
@@ -162,7 +179,9 @@ func (cc *ConsulClient) PutWithSession(ctx context.Context, key string, value []
 		if err != nil {
 			return fmt.Errorf("acquire failed: %w", err)
 		}
-		return fmt.Errorf("key %s already aquired", key)
+		return &ErrAlreadyAquired{
+			Key: key,
+		}
 	}
 	return err
 }

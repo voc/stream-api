@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -25,8 +26,6 @@ import (
 )
 
 var transcoderTTL = 10 * time.Second
-
-var ServicePrefix = client.ServicePrefix("transcoder")
 
 type Transcoder struct {
 	api        client.ServiceAPI
@@ -76,7 +75,20 @@ func (t *Transcoder) run(parentContext context.Context) {
 	ctx, cancel := context.WithCancel(parentContext)
 	defer cancel()
 
-	t.publishStatus(ctx)
+	deadline := time.Now().Add(time.Second * 30)
+	for {
+		err := t.publishStatus(ctx)
+		if err != nil {
+			var e *client.ErrAlreadyAquired
+			if errors.As(err, &e) && deadline.After(time.Now()) {
+				log.Debug().Msgf("key %s still aquired", e.Key)
+				time.Sleep(3 * time.Second)
+				continue
+			}
+			log.Fatal().Err(err).Msg("transcoder/publish")
+		}
+		break
+	}
 	transcoderChan, err := t.api.Watch(ctx, client.TranscoderPrefix)
 	if err != nil {
 		log.Fatal().Err(err).Msg("transcoder watch")
@@ -116,7 +128,10 @@ func (t *Transcoder) run(parentContext context.Context) {
 				if service.Stopped() {
 					log.Info().Msgf("transcode/service: stopped %s", key)
 					delete(t.services, key)
-					t.publishStatus(ctx)
+					err = t.publishStatus(ctx)
+					if err != nil {
+						log.Error().Err(err).Msgf("transcoder/publish")
+					}
 				}
 				// stop unnecessary services
 				if _, found := t.streams[key]; !found {
@@ -145,7 +160,7 @@ func (t *Transcoder) run(parentContext context.Context) {
 }
 
 // publishStatus announces the transcoder to the network
-func (t *Transcoder) publishStatus(ctx context.Context) {
+func (t *Transcoder) publishStatus(ctx context.Context) error {
 	var streams []string
 	for key := range t.services {
 		streams = append(streams, key)
@@ -157,10 +172,15 @@ func (t *Transcoder) publishStatus(ctx context.Context) {
 	}
 	data, err := json.Marshal(status)
 	if err != nil {
-		log.Error().Err(err).Msg("transcoder marshal")
-		return
+		return fmt.Errorf("marshal: %w", err)
 	}
-	t.api.PutWithSession(ctx, "transcoder", data)
+
+	key := client.ServicePath("transcode", t.name)
+	err = t.api.PutWithSession(ctx, key, data)
+	if err != nil {
+		return fmt.Errorf("put: %w", err)
+	}
+	return nil
 }
 
 // handleTranscoder handles an etcd transcoder update
@@ -169,6 +189,7 @@ func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
 		return
 	}
 	name := client.ParseServiceName(string(update.KV.Key()))
+	// log.Debug().Msgf("got transcoder update: %v name: %s", update, name)
 	if name == "" {
 		return
 	}
@@ -195,6 +216,7 @@ func (t *Transcoder) handleStream(ctx context.Context, update *client.WatchUpdat
 	}
 	path := string(update.KV.Key())
 	name := client.ParseStreamName(path)
+	// log.Debug().Msgf("handle stream %s %s", path, name)
 	if name == "" {
 		return
 	}
@@ -247,7 +269,7 @@ func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, upd
 		}
 		t.claimStream(ctx, stream)
 	}
-	log.Debug().Msgf("transcoder/streamsTranscoders %v", t.streamTranscoders)
+	log.Debug().Msgf("transcoder/streamTranscoders %v", t.streamTranscoders)
 }
 
 // shouldClaim computes whether we should claim a slot for a certain service
@@ -265,6 +287,7 @@ func (t *Transcoder) shouldClaim() bool {
 
 	// Claim stream if we are the top candidate
 	if len(transcoders) < 1 {
+		log.Warn().Msg("no transcoders found")
 		return false
 	}
 	if transcoders[0].Name != t.name {
@@ -287,36 +310,44 @@ func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
 		log.Error().Err(err).Msgf("transcoder/claim: service %s", s.Slug)
 	}
 	t.services[s.Slug] = service
-	t.publishStatus(ctx)
+	err = t.publishStatus(ctx)
+	if err != nil {
+		log.Error().Err(err).Msgf("transcoder/publish")
+	}
 }
 
 var configTemplate = template.Must(template.New("transcoderConfig").Parse(`
 stream_key={{ .Slug }}
 format={{ .Format }}
 output={{ .OutputType }}
+type={{ .TranscodingType }}
 transcoding_source={{ .Source }}
-transcoding_sink={{ index .Sinks 0 }}
+transcoding_sink={{ .Sink }}
 `))
 
 func (t *Transcoder) createService(ctx context.Context, s *stream.Stream) (*systemd.Service, error) {
 	type StreamConfig struct {
-		Slug       string
-		Format     string
-		OutputType string
-		Source     string
-		Sinks      []string
+		Slug            string
+		Format          string
+		OutputType      string
+		TranscodingType string
+		Source          string
+		Sink            string
 	}
 	var buf bytes.Buffer
 	err := configTemplate.Execute(&buf, &StreamConfig{
-		Slug:       s.Slug,
-		Format:     s.Format,
-		Source:     s.Source,
-		Sinks:      []string{t.sink},
-		OutputType: "direct",
+		Slug:            s.Slug,
+		Format:          s.Format,
+		Source:          s.Source,
+		Sink:            t.sink,
+		OutputType:      "direct",
+		TranscodingType: "h264-only",
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("transcoder: templateConfig")
 	}
+
+	log.Debug().Msgf("create service config:\n%v", buf.String())
 
 	return systemd.NewService(ctx, &systemd.ServiceConfig{
 		Config:     buf.Bytes(),
