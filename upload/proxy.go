@@ -15,11 +15,6 @@ import (
 	"time"
 )
 
-type ProxyRequest struct {
-	req      *http.Request
-	deadline time.Time
-}
-
 type Sink struct {
 	Address  string
 	URL      url.URL
@@ -220,5 +215,4 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(200)
 	w.Write([]byte("ok"))
-	// r.Body.Close()
 }
