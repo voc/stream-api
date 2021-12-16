@@ -1,0 +1,4 @@
+[[sinks]]
+address = "https://live.ber.c3voc.de/upload/"
+username = "foo"
+password = "foobar123"
