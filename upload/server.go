@@ -3,7 +3,6 @@ package upload
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -138,6 +136,7 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			fail(w, fmt.Errorf("rename: %w", err))
 		}
+		log.Println("upload", r.URL.Path)
 	} else if r.Method == "DELETE" {
 		path := filepath.Join(s.storePath, r.URL.Path)
 		os.Remove(path)
@@ -186,27 +185,11 @@ func (s *Server) HandleSegment(body io.Reader, output io.Writer, path string, sl
 // Authenticate using basic auth
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (string, bool) {
 	w.Header().Add("WWW-Authenticate", `Basic realm=upload, charset="UTF-8"`)
-	auth := strings.Trim(r.Header.Get("Authorization"), "\n")
-	log.Println("auth", auth, r.URL.Path)
-	if len(auth) > 6 && strings.ToLower(auth[:6]) != "basic " {
+	username, password, ok := r.BasicAuth()
+	if !ok {
 		return "", false
 	}
-	split := strings.Split(auth, " ")
-	if len(split) != 2 {
-		return "", false
-	}
-	buf := bytes.NewBuffer([]byte(split[1]))
-	rd := base64.NewDecoder(base64.StdEncoding, buf)
-	res, err := io.ReadAll(rd)
-	if err != nil {
-		return "", false
-	}
-	split = strings.Split(strings.ReplaceAll(string(res), "\n", ""), ":")
-	if len(split) != 2 {
-		return "", false
-	}
-	slug, ret := s.auth.Auth(split[0], split[1], r.URL.Path)
-	// log.Println("split", split[0], split[1], ret)
+	slug, ret := s.auth.Auth(username, password, r.URL.Path)
 	return slug, ret
 }
 
