@@ -149,11 +149,6 @@ func (t *Transcoder) run(parentContext context.Context) {
 				}
 				// claim streams without active transcoder
 				t.claimStream(ctx, stream)
-
-				// check whether we have further capacity
-				if !t.shouldClaim() {
-					break
-				}
 			}
 		}
 	}
@@ -239,10 +234,7 @@ func (t *Transcoder) handleStreamUpdate(ctx context.Context, key string, update 
 			return
 		}
 		t.streams[key] = &str
-		// see if we should assign ourselves after a new stream was added
-		if !t.shouldClaim() {
-			break
-		}
+		// try to assign ourselves after a new stream was added
 		t.claimStream(ctx, &str)
 
 	case client.UpdateTypeDelete:
@@ -264,9 +256,7 @@ func (t *Transcoder) handleStreamTranscoder(ctx context.Context, key string, upd
 			break
 		}
 		// check if we should assign ourselves when another transcoder leaves
-		if !t.shouldClaim() {
-			break
-		}
+
 		t.claimStream(ctx, stream)
 	}
 	log.Debug().Msgf("transcoder/streamTranscoders %v", t.streamTranscoders)
@@ -298,22 +288,31 @@ func (t *Transcoder) shouldClaim() bool {
 
 // claimStream claims a stream for the current transcoder
 func (t *Transcoder) claimStream(ctx context.Context, s *stream.Stream) {
+	if !t.shouldClaim() {
+		return
+	}
+	// wait for reclaim
+	if service, ok := t.services[s.Slug]; ok && service.Stopping() {
+		log.Debug().Msgf("transcoder/claim: ignore %s as service is stopping", s.Slug)
+		return
+	}
+
 	key := client.StreamTranscoderPath(s.Slug)
 	err := t.api.PutWithSession(ctx, key, []byte(t.name))
 	if err != nil {
 		log.Error().Err(err).Msgf("transcoder/claim: %s", s.Slug)
 		return
 	}
+
+	// already claimed for us
+	if service, ok := t.services[s.Slug]; ok {
+		log.Debug().Msgf("transcoder/claim: restart %s", s.Slug)
+		service.Restart(t.templateConfig(s))
+		return
+	}
+
 	log.Info().Msgf("transcoder: claimed %s", s.Slug)
-	service, err := t.createService(ctx, s)
-	if err != nil {
-		log.Error().Err(err).Msgf("transcoder/claim: service %s", s.Slug)
-	}
-	t.services[s.Slug] = service
-	err = t.publishStatus(ctx)
-	if err != nil {
-		log.Error().Err(err).Msgf("transcoder/publish")
-	}
+	t.startService(ctx, s)
 }
 
 var configTemplate = template.Must(template.New("transcoderConfig").Parse(`
@@ -325,7 +324,7 @@ transcoding_source={{ .Source }}
 transcoding_sink={{ .Sink }}
 `))
 
-func (t *Transcoder) createService(ctx context.Context, s *stream.Stream) (*systemd.Service, error) {
+func (t *Transcoder) templateConfig(s *stream.Stream) []byte {
 	type StreamConfig struct {
 		Slug            string
 		Format          string
@@ -346,12 +345,34 @@ func (t *Transcoder) createService(ctx context.Context, s *stream.Stream) (*syst
 	if err != nil {
 		log.Fatal().Err(err).Msg("transcoder: templateConfig")
 	}
+	return buf.Bytes()
+}
 
-	log.Debug().Msgf("create service config:\n%v", buf.String())
+func (t *Transcoder) startService(ctx context.Context, s *stream.Stream) {
+	log.Info().Msgf("transcoder/service: start %s", s.Slug)
+	service, err := t.createService(ctx, s)
+	if err != nil {
+		log.Error().Err(err).Msgf("transcoder/service: %s", s.Slug)
+	}
+	t.services[s.Slug] = service
+	err = t.publishStatus(ctx)
+	if err != nil {
+		log.Error().Err(err).Msgf("transcoder/service: publish")
+	}
+}
 
+func (t *Transcoder) createService(ctx context.Context, s *stream.Stream) (*systemd.Service, error) {
 	return systemd.NewService(ctx, &systemd.ServiceConfig{
-		Config:     buf.Bytes(),
+		Config:     t.templateConfig(s),
 		ConfigPath: path.Join(t.configPath, s.Slug),
 		UnitName:   fmt.Sprintf("transcode@%s.target", s.Slug),
+		Cleanup: func() {
+			key := client.StreamTranscoderPath(s.Slug)
+			err := t.api.Delete(ctx, key)
+			if err != nil {
+				log.Error().Err(err).Msgf("transcoder/unclaim: %s", s.Slug)
+				return
+			}
+		},
 	})
 }

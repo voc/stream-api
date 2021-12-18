@@ -10,18 +10,16 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/voc/stream-api/client"
 )
+
+type CleanupFunc func()
 
 // ServiceConfig represents config for a systemd service
 type ServiceConfig struct {
 	Config     []byte
 	ConfigPath string
 	UnitName   string
-
-	Lease client.LeaseID      // optional lease to keep alive while the service is active
-	API   client.KeepaliveAPI // optional api for lease keepalive while the service is active
-	TTL   time.Duration       // optional ttl for lease keepalive while the service is active
+	Cleanup    CleanupFunc
 }
 
 // Service represents a single running systemd unit.
@@ -33,6 +31,8 @@ type Service struct {
 	done    sync.WaitGroup
 	stopped atomic.Value
 	cancel  context.CancelFunc
+	ctx     context.Context
+	mutex   sync.Mutex // mutex for preventing parallel unit and config access
 }
 
 // NewService creates a new Service
@@ -47,6 +47,7 @@ func NewService(parentContext context.Context, conf *ServiceConfig) (*Service, e
 		conn:   conn,
 		conf:   conf,
 		cancel: cancel,
+		ctx:    ctx,
 	}
 	s.stopped.Store(false)
 	s.done.Add(1)
@@ -63,38 +64,20 @@ func (s *Service) Run(ctx context.Context) {
 	s.start(ctx)
 	defer s.stop()
 
-	if s.conf.Lease != 0 && s.conf.API != nil {
-		s.keepaliveLease(ctx)
-	}
+	s.keepalive(ctx)
 
 	<-ctx.Done()
 }
 
-func (s *Service) keepaliveLease(ctx context.Context) {
-	timeout := s.conf.TTL / 2
-	if timeout <= 0 {
-		timeout = time.Second * 5
-	}
-
-	ticker := time.NewTicker(timeout)
+func (s *Service) keepalive(ctx context.Context) {
+	ticker := time.NewTicker(time.Second * 5)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			revokeCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-			defer cancel()
-			err := s.conf.API.RevokeLease(revokeCtx, s.conf.Lease)
-			if err != nil {
-				log.Error().Err(err).Msg("service: lease")
-			}
 			return
 		case <-ticker.C:
-			err := s.conf.API.RefreshLease(ctx, s.conf.Lease)
-			if err != nil {
-				log.Error().Err(err).Msg("service: lease")
-				return
-			}
 			s.syncUnitState(ctx)
 		}
 	}
@@ -102,6 +85,8 @@ func (s *Service) keepaliveLease(ctx context.Context) {
 
 // start deploys the config and restarts the unit if it changed
 func (s *Service) start(ctx context.Context) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if s.deployConfig() {
 		if err := s.conn.RestartUnit(ctx, s.conf.UnitName); err != nil {
 			log.Error().Err(err).Msg("service: restartUnit")
@@ -118,6 +103,8 @@ func (s *Service) start(ctx context.Context) {
 
 // stop disables/stops the unit and removes the config file
 func (s *Service) stop() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if err := s.conn.DisableUnit(context.Background(), s.conf.UnitName); err != nil {
 		log.Error().Err(err).Msg("service: disableUnit")
 	}
@@ -125,6 +112,9 @@ func (s *Service) stop() {
 		log.Error().Err(err).Msg("service: stopUnit")
 	}
 	s.removeConfig()
+	if s.conf.Cleanup != nil {
+		s.conf.Cleanup()
+	}
 }
 
 // deployConfig templates the service config
@@ -156,6 +146,8 @@ func (s *Service) removeConfig() {
 // syncState syncs transcoding jobs with running systemd units
 // not needed if unit can't fail (Restart=always, StartLimitInterval=0)
 func (s *Service) syncUnitState(ctx context.Context) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	units, err := s.conn.ListUnits(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("service: listUnits")
@@ -190,4 +182,24 @@ func (s *Service) Wait() {
 // Stopped reports whether the service has stopped.
 func (s *Service) Stopped() bool {
 	return s.stopped.Load().(bool)
+}
+
+func (s *Service) Stopping() bool {
+	select {
+	case <-s.ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// Restart service with new config
+func (s *Service) Restart(newConfig []byte) {
+	if s.Stopping() {
+		return
+	}
+	s.mutex.Lock()
+	s.conf.Config = newConfig
+	s.mutex.Unlock()
+	s.start(s.ctx)
 }

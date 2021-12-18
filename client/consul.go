@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -116,7 +117,11 @@ func (cc *ConsulClient) Watch(ctx context.Context, prefix string) (UpdateChan, e
 	// run plan
 	go func() {
 		err := plan.RunWithClientAndHclog(cc.client, nil)
-		log.Error().Err(err).Msg("watch stopped")
+		select {
+		case <-ctx.Done():
+		default:
+			log.Error().Err(err).Msg("watch stopped")
+		}
 	}()
 
 	// stop plan
@@ -129,6 +134,7 @@ func (cc *ConsulClient) Watch(ctx context.Context, prefix string) (UpdateChan, e
 
 // handleWatch updates the cache on consul changes
 func (cc *ConsulClient) makeWatchHandler(ch UpdateChan) watch.HybridHandlerFunc {
+	cache := make(map[string][]byte)
 	return func(b watch.BlockingParamVal, update interface{}) {
 		switch val := update.(type) {
 		case *api.KVPair:
@@ -140,10 +146,39 @@ func (cc *ConsulClient) makeWatchHandler(ch UpdateChan) watch.HybridHandlerFunc 
 			}}
 		case api.KVPairs:
 			update := make([]*WatchUpdate, 0, len(val))
+			var expected []string
+			for key := range cache {
+				expected = append(expected, key)
+			}
 			for _, pair := range val {
+				for i, name := range expected {
+					if pair.Key == name {
+						expected = append(expected[:i], expected[i+1:]...)
+						break
+					}
+				}
+				// check against old
+				old, ok := cache[pair.Key]
+				if ok && bytes.Equal(old, pair.Value) {
+					continue
+				}
+				// add new
+				log.Debug().Msgf("watch update %s %s", pair.Key, string(pair.Value))
 				update = append(update, &WatchUpdate{
 					KV: &ConsulKV{kv: pair},
 				})
+				cache[pair.Key] = pair.Value
+			}
+			// remove outdated
+			for _, missing := range expected {
+				log.Debug().Msgf("watch del %s", missing)
+				update = append(update, &WatchUpdate{
+					Type: UpdateTypeDelete,
+					KV: &ConsulKV{
+						kv: &api.KVPair{Key: missing},
+					},
+				})
+				delete(cache, missing)
 			}
 			ch <- update
 		default:
