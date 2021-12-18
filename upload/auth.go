@@ -9,7 +9,6 @@ import (
 
 	"github.com/minio/pkg/wildcard"
 	"github.com/pelletier/go-toml"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type Auth interface {
@@ -65,8 +64,7 @@ func (a *StaticAuth) Auth(user string, pass string, path string) (string, bool) 
 	if !ok {
 		return "", false
 	}
-	err := bcrypt.CompareHashAndPassword([]byte(entry.Pass), []byte(pass))
-	if err != nil {
+	if pass != entry.Pass {
 		return "", false
 	}
 
