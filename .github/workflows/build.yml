@@ -16,8 +16,8 @@ jobs:
     - name: Build
       run: make all
 
-    - name: Test
-      run: go test -v ./...
+      #- name: Test
+      #  run: go test -v ./...
 
     - name: upload binaries
       uses: actions/upload-artifact@v2
