@@ -1,9 +1,12 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    tags: v.*
+    branches: master
 
 jobs:
-  build:
+  release:
     runs-on: "ubuntu-20.04"
     steps:
     - uses: actions/checkout@v2
@@ -19,11 +22,12 @@ jobs:
       #- name: Test
       #  run: go test -v ./...
 
-    - name: upload binaries
-      uses: actions/upload-artifact@v2
+    - name: do release
+      uses: "marvinpinto/action-automatic-releases@latest"
       with:
-        name: binaries
-        path: |
+        repo_token: "${{ secrets.GITHUB_TOKEN }}"
+        prerelease: false
+        files: |
           stream-api
           upload-proxy
           upload-server
