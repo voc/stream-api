@@ -15,8 +15,8 @@ frontend:
 build: stream-api upload-server upload-proxy
 
 install: stream-api
-	mkdir -p $$(pwd)/debian/stream-api/usr/bin
-	install -m 0755 stream-api $$(pwd)/debian/stream-api/usr/bin
-	install -m 0755 upload-server $$(pwd)/debian/stream-api/usr/bin
-	install -m 0755 upload-proxy $$(pwd)/debian/stream-api/usr/bin
+	mkdir -p $$(pwd)/debian/stream-api/usr/local/bin
+	install -m 0755 stream-api $$(pwd)/debian/stream-api/usr/local/bin
+	install -m 0755 upload-server $$(pwd)/debian/stream-api/usr/local/bin
+	install -m 0755 upload-proxy $$(pwd)/debian/stream-api/usr/local/bin
 
