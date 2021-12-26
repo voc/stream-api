@@ -1,4 +1,4 @@
-.DEFAULT_GOAL := build
+.DEFAULT_GOAL := reallyall
 
 stream-api:
 	CGO_ENABLED=0 go build ./cmd/stream-api
