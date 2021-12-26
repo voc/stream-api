@@ -1,0 +1,14 @@
+Source: stream-api
+Section: video
+Priority: optional
+Maintainer: derchris <derchris@me.com>
+Build-Depends: debhelper (>=10), pkgconf, ssl-cert, ca-certificates, tar, wget, curl, git, golang, nodejs, npm
+Standards-Version: 4.50
+Homepage: https://github.com/iSchluff/stream-api
+
+Package: stream-api
+Priority: extra
+Architecture: any
+Depends: ${shlibs:Depends}
+Description: stream-api
+ Distributed media stream processing using an etcd backend.
