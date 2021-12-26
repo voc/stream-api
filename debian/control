@@ -2,7 +2,7 @@ Source: stream-api
 Section: video
 Priority: optional
 Maintainer: derchris <derchris@me.com>
-Build-Depends: debhelper (>=10), pkgconf, ssl-cert, ca-certificates, tar, wget, curl, git, golang, nodejs, npm
+Build-Depends: debhelper (>=10), pkgconf, ssl-cert, ca-certificates, tar, wget, curl, git
 Standards-Version: 4.50
 Homepage: https://github.com/iSchluff/stream-api
 
