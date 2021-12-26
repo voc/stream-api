@@ -21,8 +21,3 @@ frontend:
 
 reallyall: frontend all
 .PHONY: reallyall
-
-clean:
-	make -C monitor/frontend clean
-	go clean
-.PHONY: clean
