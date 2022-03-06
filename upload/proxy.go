@@ -21,6 +21,72 @@ type Sink struct {
 	Username string
 	Password string
 	queue    chan *http.Request
+	done     sync.WaitGroup
+}
+
+func (sink *Sink) start(ctx context.Context, client *http.Client, numWorkers int) {
+	for i := 0; i < numWorkers; i++ {
+		sink.done.Add(1)
+		go sink.work(ctx, client)
+	}
+}
+
+func (sink *Sink) handle(req *http.Request) {
+	req.URL.Scheme = sink.URL.Scheme
+	req.URL.Host = sink.URL.Host
+	req.URL.Path, req.URL.RawPath = joinURLPath(&sink.URL, req.URL)
+	req.SetBasicAuth(sink.Username, sink.Password)
+	req.Response = nil
+	req.RequestURI = ""
+outer:
+	for {
+		select {
+		case sink.queue <- req:
+			break outer
+		default:
+			// drop front of queue
+			<-sink.queue
+			log.Println("sink", sink.URL.Host, "queue overflow")
+			continue
+		}
+	}
+}
+
+func (sink *Sink) wait() {
+	sink.done.Wait()
+}
+
+func (sink *Sink) work(ctx context.Context, client *http.Client) {
+	defer sink.done.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case req := <-sink.queue:
+		retry:
+			for {
+				select {
+				case <-req.Context().Done():
+					log.Println("discarding timed out request")
+					break retry
+				default:
+				}
+				res, err := client.Do(req)
+				if err != nil {
+					log.Println("sink err", err)
+					break retry
+				}
+				res.Body.Close()
+				if res.StatusCode != 200 {
+					log.Println("upload failed", req.Method, req.URL.Path, sink.URL.Host, res.Status)
+					// retry if we have space in queue
+					time.Sleep(time.Second)
+					continue
+				}
+				break
+			}
+		}
+	}
 }
 
 type Proxy struct {
@@ -44,7 +110,7 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 	}
 
 	for _, sink := range p.sinks {
-		sink.queue = make(chan *http.Request, 32)
+		sink.queue = make(chan *http.Request, 128)
 	}
 
 	mux := http.NewServeMux()
@@ -75,51 +141,9 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 	}()
 
 	// run sink uploaders
-	for _, sink := range sinks {
-		p.done.Add(1)
+	for _, sink := range p.sinks {
 		log.Printf("setup sink %v\n", sink)
-		go func(sink *Sink) {
-			defer p.done.Done()
-			// todo: implement upload workers for parallel upload
-			// and avoiding blocking
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case req := <-sink.queue:
-					req.URL.Scheme = sink.URL.Scheme
-					req.URL.Host = sink.URL.Host
-					req.URL.Path, req.URL.RawPath = joinURLPath(&sink.URL, req.URL)
-					req.SetBasicAuth(sink.Username, sink.Password)
-					req.Response = nil
-					req.RequestURI = ""
-
-				retry:
-					for {
-						select {
-						case <-req.Context().Done():
-							log.Println("discarding timed out request")
-							break retry
-						default:
-						}
-						res, err := p.client.Do(req)
-						// todo: retry, timeout
-						if err != nil {
-							log.Println("sink err", err)
-							break retry
-						}
-						res.Body.Close()
-						if res.StatusCode != 200 {
-							log.Println("upload failed", req.URL.Path, sink.URL.Host, res.Status)
-							// retry if we have space in queue
-							time.Sleep(time.Second)
-							continue
-						}
-						break
-					}
-				}
-			}
-		}(sink)
+		sink.start(ctx, p.client, 4)
 	}
 
 	return p
@@ -128,6 +152,9 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 // Wait for server to finish
 func (p *Proxy) Wait() {
 	p.done.Wait()
+	for _, sink := range p.sinks {
+		sink.wait()
+	}
 }
 
 // The channel returned by Errors is pushed fatal errors
@@ -142,7 +169,7 @@ func getDeadline(path string) time.Time {
 	case ".m3u8":
 		fallthrough
 	case ".mpd":
-		return now.Add(time.Second * 8)
+		return now.Add(time.Second * 6)
 	default:
 		return now.Add(time.Second * 60)
 	}
@@ -192,26 +219,15 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	deadline := getDeadline(r.URL.Path)
 	ctx, _ := context.WithDeadline(p.ctx, deadline)
-	log.Println("handle", r.URL.Path)
+	log.Println("handle", r.Method, r.URL.Path)
 
 	var b bytes.Buffer
 	b.ReadFrom(r.Body)
 	for _, sink := range p.sinks {
-	outer:
-		for {
-			req := r.Clone(ctx)
-			req.ContentLength = r.ContentLength
-			req.Body = ioutil.NopCloser(bytes.NewReader(b.Bytes()))
-			select {
-			case sink.queue <- req:
-				break outer
-			default:
-				// drop front of queue
-				<-sink.queue
-				log.Println("sink", sink.URL.Host, "queue overflow")
-				continue
-			}
-		}
+		req := r.Clone(ctx)
+		req.ContentLength = r.ContentLength
+		req.Body = ioutil.NopCloser(bytes.NewReader(b.Bytes()))
+		sink.handle(req)
 	}
 	w.WriteHeader(200)
 	w.Write([]byte("ok"))
