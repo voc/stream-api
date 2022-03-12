@@ -1,3 +1,9 @@
+stream-api (0.1.2) stable; urgency=medium
+
+  * upload-proxy: fix retries, for real this time 
+
+ -- Anton Schubert <ischluff@mailbox.org>  Sat, 12 Mar 2022 14:27:51 +0000
+
 stream-api (0.1.1) stable; urgency=medium
 
   * upload-proxy: implement sink workers, improve retries
