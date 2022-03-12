@@ -6,13 +6,15 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
-	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type Sink struct {
@@ -46,7 +48,7 @@ outer:
 		default:
 			// drop front of queue
 			<-sink.queue
-			log.Println("sink", sink.URL.Host, "queue overflow")
+			log.Info().Str("sink", sink.URL.Host).Msg("queue overflow")
 			continue
 		}
 	}
@@ -67,18 +69,23 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 			for {
 				select {
 				case <-req.Context().Done():
-					log.Println("discarding timed out request")
+					log.Warn().Str("sink", sink.URL.Host).Msg("discarding timed out request")
 					break retry
 				default:
 				}
 				res, err := client.Do(req)
 				if err != nil {
-					log.Println("sink err", err)
+					log.Error().Str("sink", sink.URL.Host).Err(err).Msg("sink error")
 					break retry
 				}
 				res.Body.Close()
 				if res.StatusCode != 200 {
-					log.Println("upload failed", req.Method, req.URL.Path, sink.URL.Host, res.Status)
+					log.Warn().
+						Str("sink", sink.URL.Host).
+						Str("method", req.Method).
+						Str("path", req.URL.Path).
+						Str("status", res.Status).
+						Msg("upload failed")
 					// retry if we have space in queue
 					time.Sleep(time.Second)
 					continue
@@ -99,8 +106,15 @@ type Proxy struct {
 
 func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 	tr := &http.Transport{
-		MaxIdleConnsPerHost: 16,
-		IdleConnTimeout:     60 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 	p := &Proxy{
 		sinks:  sinks,
@@ -136,7 +150,7 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 		<-ctx.Done()
 		err := srv.Close()
 		if err != nil {
-			log.Println("close:", err)
+			log.Error().Err(err).Msg("close")
 		}
 	}()
 
@@ -212,21 +226,25 @@ func joinURLPath(a, b *url.URL) (path, rawpath string) {
 func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "PUT" && r.Method != "POST" && r.Method != "DELETE" {
 		w.WriteHeader(200)
-		log.Println("invalid method", r.Method, r.URL.Path)
+		log.Warn().Str("method", r.Method).Str("url", r.URL.Path).Msg("invalid method")
 		io.WriteString(w, "Invalid method")
 		return
 	}
 
 	deadline := getDeadline(r.URL.Path)
 	ctx, _ := context.WithDeadline(p.ctx, deadline)
-	log.Println("handle", r.Method, r.URL.Path)
+	log.Debug().Str("method", r.Method).Str("url", r.URL.Path).Msg("handle")
 
 	var b bytes.Buffer
 	b.ReadFrom(r.Body)
+	getBody := func() (io.ReadCloser, error) {
+		return ioutil.NopCloser(bytes.NewReader(b.Bytes())), nil
+	}
 	for _, sink := range p.sinks {
 		req := r.Clone(ctx)
 		req.ContentLength = r.ContentLength
-		req.Body = ioutil.NopCloser(bytes.NewReader(b.Bytes()))
+		req.GetBody = getBody
+		req.Body, _ = getBody()
 		sink.handle(req)
 	}
 	w.WriteHeader(200)
