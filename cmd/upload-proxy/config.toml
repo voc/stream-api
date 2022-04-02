@@ -1,4 +1,9 @@
+# [[sinks]]
+# address = "https://live.ber.c3voc.de/upload/"
+# username = "foo"
+# password = "foobar123"
+
 [[sinks]]
-address = "https://live.ber.c3voc.de/upload/"
+address = "http://localhost:8080/"
 username = "foo"
 password = "foobar123"
