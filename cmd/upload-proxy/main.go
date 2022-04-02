@@ -10,7 +10,6 @@ import (
 	"github.com/pelletier/go-toml"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/voc/stream-api/upload"
 	"github.com/voc/stream-api/util"
 )
 
@@ -48,7 +47,7 @@ func main() {
 		sink.URL = *url
 		log.Info().Str("sink", sink.URL.Host).Str("basePath", sink.URL.Path).Msg("added sink")
 	}
-	proxy := upload.NewProxy(ctx, conf.ListenAddress, conf.Sinks)
+	proxy := NewProxy(ctx, conf.ListenAddress, conf.Sinks)
 	log.Info().Msgf("listening on %s", conf.ListenAddress)
 
 	select {

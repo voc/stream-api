@@ -1,6 +1,6 @@
 default.etcd/
 /config.yml
 /ssl
-stream-api
-upload-proxy
-upload-server
+/stream-api
+/upload-proxy
+/upload-server
