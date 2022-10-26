@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"io/ioutil"
 	"net/url"
 	"os"
 
@@ -30,7 +29,7 @@ func main() {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
 
-	data, err := ioutil.ReadFile(*config)
+	data, err := os.ReadFile(*config)
 	if err != nil {
 		log.Fatal().Err(err).Msg("config read failed")
 	}

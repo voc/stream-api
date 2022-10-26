@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
+
 type Proxy struct {
 	sinks  []*Sink
 	errors chan error
@@ -77,7 +77,9 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 	// run sink uploaders
 	for _, sink := range p.sinks {
 		log.Printf("setup sink %+v\n", sink)
-		sink.start(ctx, p.client, 4)
+
+		// if the number of workers is >1 the server would have to deal with out of order playlists
+		sink.start(ctx, p.client, 1)
 	}
 
 	return p
@@ -146,7 +148,7 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "PUT" && r.Method != "POST" && r.Method != "DELETE" {
 		w.WriteHeader(200)
 		log.Warn().Str("method", r.Method).Str("url", r.URL.Path).Msg("invalid method")
-		io.WriteString(w, "Invalid method")
+		_, _ = io.WriteString(w, "Invalid method")
 		return
 	}
 
@@ -155,9 +157,14 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	log.Debug().Str("method", r.Method).Str("url", r.URL.Path).Msg("handle")
 
 	var b bytes.Buffer
-	b.ReadFrom(r.Body)
+	_, err := b.ReadFrom(r.Body)
+	if err != nil {
+		log.Error().Err(err).Msg("read body")
+		w.WriteHeader(500)
+		return
+	}
 	getBody := func() (io.ReadCloser, error) {
-		return ioutil.NopCloser(bytes.NewReader(b.Bytes())), nil
+		return io.NopCloser(bytes.NewReader(b.Bytes())), nil
 	}
 	for _, sink := range p.sinks {
 		req := r.Clone(ctx)
@@ -167,5 +174,4 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		sink.handle(req)
 	}
 	w.WriteHeader(200)
-	w.Write([]byte("ok"))
 }
