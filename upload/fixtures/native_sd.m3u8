@@ -1,0 +1,7 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_main",LANGUAGE="Native",NAME="audio_2",DEFAULT=YES,URI="segment_Native.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_main",LANGUAGE="Translated",NAME="audio_3",DEFAULT=NO,URI="segment_Translated.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_main",LANGUAGE="Translated-2",NAME="audio_4",DEFAULT=NO,URI="segment_Translated-2.m3u8"
+#EXT-X-STREAM-INF:RESOLUTION=1024x576,CODECS="avc1.64081f,mp4a.40.2",BANDWIDTH=1098110,AUDIO="group_main"
+segment_SD.m3u8

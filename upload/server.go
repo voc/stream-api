@@ -1,44 +1,50 @@
 package upload
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
-	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 func fail(w http.ResponseWriter, err error) {
-	log.Println("fail", err)
+	log.Error().Err(err).Msg("fail")
 	w.WriteHeader(500)
-	io.WriteString(w, err.Error())
+	_, _ = io.WriteString(w, err.Error())
+}
+
+type ServerConfig struct {
+	Addr            string
+	OutputPath      string
+	MaxSegmentSize  int
+	MaxPlaylistSize int
+
+	PlaylistSize int
 }
 
 type Server struct {
-	registry  *Registry
-	auth      Auth
-	storePath string
-	parser    Parser
-	errors    chan error
-	done      sync.WaitGroup
+	handler    *Handler
+	auth       Auth
+	outputPath string
+	errors     chan error
+	done       sync.WaitGroup
 }
 
-func NewServer(ctx context.Context, addr string, path string, auth Auth) *Server {
+func NewServer(ctx context.Context, auth Auth, config ServerConfig) *Server {
 	s := &Server{
-		auth:      auth,
-		storePath: path,
-		errors:    make(chan error, 1),
+		handler:    NewHandler(ctx, config),
+		auth:       auth,
+		outputPath: config.OutputPath,
+		errors:     make(chan error, 1),
 	}
-	s.registry = NewRegistry(ctx, s.cleanup)
-
 	mux := http.NewServeMux()
-	srv := http.Server{Addr: addr, Handler: mux}
+	srv := http.Server{Addr: config.Addr, Handler: mux}
 
 	// set routes
 	mux.HandleFunc("/", s.HandleUpload)
@@ -61,29 +67,28 @@ func NewServer(ctx context.Context, addr string, path string, auth Auth) *Server
 		<-ctx.Done()
 		err := srv.Close()
 		if err != nil {
-			log.Println("close:", err)
+			log.Error().Err(err).Msg("close")
 		}
 	}()
 	return s
 }
 
-// Wait for server to finish
+// Wait for server to finish cleaning up
 func (s *Server) Wait() {
-	s.registry.Wait()
+	s.handler.Wait()
 	s.done.Wait()
 }
 
-// The channel returned by Errors is pushed fatal errors
+// The channel returned by Errors receives fatal errors
 func (s *Server) Errors() <-chan error {
 	return s.errors
 }
 
 func (s *Server) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	io.WriteString(w, "ok")
+	_, _ = io.WriteString(w, "ok")
 }
 
-// do delete ourselves as delete doesnt work...
-func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleUpload(w http.ResponseWriter, req *http.Request) {
 	// do auth
 	// handle post/put
 	// make sure to update files before playlist
@@ -91,95 +96,43 @@ func (s *Server) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	// register path-timeout
 	// -> cleanup if path times out
 
-	slug, ok := s.authenticate(w, r)
+	slug, ok := s.authenticate(w, req)
 	if !ok {
 		w.WriteHeader(401)
-		io.WriteString(w, "Unauthorized")
+		_, _ = io.WriteString(w, "Unauthorized")
 		return
 	}
 
-	if r.Method == "PUT" || r.Method == "POST" {
-		path := filepath.Join(s.storePath, r.URL.Path)
-		dir := filepath.Dir(path)
-		ext := filepath.Ext(path)
-		tmpPath := path + ".tmp"
-		err := os.MkdirAll(dir, 0755)
-		if err != nil {
-			fail(w, fmt.Errorf("mkdir: %w", err))
-			return
-		}
-		// log.Println("allow", r.Method, r.URL.Path)
+	path := filepath.Join(s.outputPath, req.URL.Path)
+	host, _, err := net.SplitHostPort(req.RemoteAddr)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.handler.Validate(slug, path, host); err != nil {
+		w.WriteHeader(403)
+		msg := fmt.Sprintf("Request blocked: %s", err.Error())
+		log.Debug().Msg(msg)
+		_, _ = io.WriteString(w, msg)
+		return
+	}
 
-		file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
+	if req.Method == "PUT" || req.Method == "POST" {
+		err := s.handler.HandleFile(req.Body, slug, path)
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		defer file.Close()
 
-		// add path to registry
-		s.registry.AddFile(slug, path)
-
-		switch ext {
-		case ".m3u8":
-			fallthrough
-		case ".mpd":
-			err = s.HandlePlaylist(r.Body, file, r.URL.Path, slug)
-		default:
-			err = s.HandleSegment(r.Body, file, r.URL.Path, slug)
-		}
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		err = os.Rename(tmpPath, path)
-		if err != nil {
-			fail(w, fmt.Errorf("rename: %w", err))
-		}
-		log.Println("upload", r.URL.Path)
-	} else if r.Method == "DELETE" {
-		path := filepath.Join(s.storePath, r.URL.Path)
-		os.Remove(path)
+	} else if req.Method == "DELETE" {
+		// ignore delete requests
+		// path := filepath.Join(s.storePath, req.URL.Path)
+		// os.Remove(path)
 	} else {
-		log.Println("unhandled", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		log.Debug().Str("method", req.Method).Str("path", req.URL.Path).Msg("unhandled")
+		w.WriteHeader(405)
+		_, _ = io.WriteString(w, "Method Not Allowed")
 	}
-}
-
-func (s *Server) HandlePlaylist(body io.Reader, output io.Writer, path string, slug string) error {
-	var buf bytes.Buffer
-	writer := io.MultiWriter(&buf, output)
-	_, err := io.Copy(writer, body)
-	if err != nil {
-		return fmt.Errorf("copy: %w", err)
-	}
-
-	// parse playlist
-	ext := filepath.Ext(path)
-	var interval time.Duration
-	switch ext {
-	case ".m3u8":
-		interval, err = s.parser.parseHLSPlaylist(&buf)
-	case ".mpd":
-		interval, err = s.parser.parseDashManifest(&buf)
-	default:
-		log.Fatal("unknown playlist extension", ext)
-	}
-
-	if err != nil {
-		return fmt.Errorf("playlist parse: %w", err)
-	}
-
-	// refresh stream registration
-	if interval > 0 {
-		s.registry.Keepalive(slug, interval*4)
-	}
-
-	return nil
-}
-
-func (s *Server) HandleSegment(body io.Reader, output io.Writer, path string, slug string) error {
-	_, err := io.Copy(output, body)
-	return err
 }
 
 // Authenticate using basic auth
@@ -191,13 +144,4 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (string, b
 	}
 	slug, ret := s.auth.Auth(username, password, r.URL.Path)
 	return slug, ret
-}
-
-// cleanup removes a stream directory
-func (s *Server) cleanup(slug string, path string) {
-	log.Println("remove dir", path)
-	err := os.RemoveAll(path)
-	if err != nil {
-		log.Println("remove dir:", err)
-	}
 }

@@ -1,24 +1,17 @@
 package upload
 
 import (
-	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/minio/pkg/wildcard"
-	"github.com/pelletier/go-toml"
 )
 
 type Auth interface {
 	// Auth checks whether the user has access to the passed relative path
 	// Note: doesn't check whether the path is actually relative
 	Auth(user string, pass string, path string) (string, bool)
-}
-
-type GlobalConfig struct {
-	AllowedDirs []string `toml:"allowedDirs"`
 }
 
 type AuthConfigEntry struct {
@@ -28,8 +21,8 @@ type AuthConfigEntry struct {
 }
 
 type AuthConfig struct {
-	Global GlobalConfig
-	Auth   []AuthConfigEntry
+	AllowedDirs []string `toml:"allowedDirs"`
+	Users       []AuthConfigEntry
 }
 
 type StaticAuth struct {
@@ -37,26 +30,15 @@ type StaticAuth struct {
 	conf        map[string]AuthConfigEntry
 }
 
-func NewStaticAuth(configPath string) (Auth, error) {
-	conf := AuthConfig{}
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
-	err = toml.Unmarshal(data, &conf)
-	if err != nil {
-		return nil, err
-	}
-	log.Println("read auth from", configPath)
-
+func NewStaticAuth(conf AuthConfig) Auth {
 	a := &StaticAuth{
-		allowedDirs: conf.Global.AllowedDirs,
+		allowedDirs: conf.AllowedDirs,
 		conf:        make(map[string]AuthConfigEntry),
 	}
-	for _, entry := range conf.Auth {
+	for _, entry := range conf.Users {
 		a.conf[entry.User] = entry
 	}
-	return a, nil
+	return a
 }
 
 func (a *StaticAuth) Auth(user string, pass string, path string) (string, bool) {

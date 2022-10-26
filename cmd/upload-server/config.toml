@@ -1,0 +1,14 @@
+[server]
+addr = ":8080"
+outputPath = "/tmp/upload"
+
+# output playlist size
+playlistSize = 3
+
+[auth]
+allowedDirs = ["/hls", "/dash", "/thumbnail"]
+
+[[auth.users]]
+match = "*"
+pass = "foobar123"
+user = "foo"
