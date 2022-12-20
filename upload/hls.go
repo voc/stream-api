@@ -5,11 +5,13 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/quangngotan95/go-m3u8/m3u8"
 )
 
 type HLSParser struct {
+	mutex          sync.Mutex
 	slug           string
 	basePath       string
 	playlistConfig PlaylistConfig
@@ -75,6 +77,9 @@ func (h *HLSParser) ParsePlaylist(path string, reader io.Reader) error {
 		return err
 	}
 
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
 	// handle master playlist
 	if playlist.IsMaster() {
 		fixupCodecInformation(playlist)
@@ -91,6 +96,7 @@ func (h *HLSParser) ParsePlaylist(path string, reader io.Reader) error {
 		if err := h.generateLanguageMasters(path, "sd", playlist); err != nil {
 			return err
 		}
+		return nil
 	}
 
 	// lookup playlist by path
@@ -245,8 +251,10 @@ func (h *HLSParser) keepFile(name string) {
 // allow segment to be deleted
 func (h *HLSParser) expireFile(name string) {
 	path := filepath.Join(h.basePath, name)
-	close(h.files[path])
-	delete(h.files, path)
+	if channel, ok := h.files[path]; ok {
+		close(channel)
+		delete(h.files, path)
+	}
 }
 
 // write playlist to file
