@@ -68,7 +68,7 @@ func (w *watcher) handleStreamSettings(ctx context.Context, update *client.Watch
 	if update.KV == nil {
 		return
 	}
-	path := string(update.KV.Key)
+	path := string(update.KV.Key())
 	name := client.ParseStreamName(path)
 	log.Debug().Msgf("stream settings update %v", update.KV.Value)
 	if name == "" {
@@ -80,7 +80,7 @@ func (w *watcher) handleStreamSettings(ctx context.Context, update *client.Watch
 	switch update.Type {
 	case client.UpdateTypePut:
 		var s stream.Settings
-		err := json.Unmarshal(update.KV.Value, &s)
+		err := json.Unmarshal(update.KV.Value(), &s)
 		if err != nil {
 			log.Error().Err(err).Msg("auth: settings unmarshal")
 			return

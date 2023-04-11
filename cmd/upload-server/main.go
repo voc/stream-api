@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -15,8 +16,8 @@ func main() {
 	config := defaultConfig()
 	configPath := flag.String("config", "config.toml", "Set path to auth config")
 	debug := flag.Bool("debug", false, "sets log level to debug")
-	flag.StringVar(&config.Server.Addr,"addr", config.Server.Addr, "Set listen address")
-	flag.StringVar(&config.Server.OutputPath,"path", config.Server.OutputPath, "Set upload storage path")
+	flag.StringVar(&config.Server.Addr, "addr", config.Server.Addr, "Set listen address")
+	flag.StringVar(&config.Server.OutputPath, "path", config.Server.OutputPath, "Set upload storage path")
 	flag.Parse()
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -30,21 +31,24 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to read config")
 	}
-	log.Debug().Msgf("config: %+v",config)
+	log.Debug().Msgf("config: %+v", config)
+
+	auth := upload.NewStaticAuth(config.Auth)
+	server := upload.NewServer(auth, config.Server)
+	log.Info().Msgf("listening on %s", config.Server.Addr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	util.HandleSignal(ctx, cancel)
-	auth := upload.NewStaticAuth(config.Auth)
-	server := upload.NewServer(ctx, auth, config.Server)
-	log.Info().Msgf("listening on %s", config.Server.Addr)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case err := <-server.Errors():
+			log.Error().Err(err).Msg("server failed")
+			cancel()
+		}
+	}()
 
-	select {
-	case <-ctx.Done():
-	case err := <-server.Errors():
-		log.Error().Err(err).Msg("server failed")
-		cancel()
-	}
-
-	server.Wait()
+	util.GracefulShutdown(ctx, func() {
+		server.Stop()
+	}, time.Second*2)
 }

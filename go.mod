@@ -28,9 +28,13 @@ require (
 	golang.org/x/crypto v0.0.0-20210421170649-83a5a9bb288b
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac // indirect
 	gopkg.in/yaml.v2 v2.4.0
+	gotest.tools/v3 v3.4.0
 )
 
 replace github.com/coreos/go-systemd => github.com/coreos/go-systemd/v22 v22.0.0
+
 replace github.com/coreos/bbolt => go.etcd.io/bbolt v1.3.5
+
 replace github.com/coreos/etcd => go.etcd.io/etcd v3.3.27+incompatible
+
 replace google.golang.org/grpc => google.golang.org/grpc v1.26.0

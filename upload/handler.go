@@ -1,7 +1,6 @@
 package upload
 
 import (
-	"context"
 	"errors"
 	"io"
 	"path/filepath"
@@ -10,22 +9,21 @@ import (
 
 // Handler tracks the lifetime of uploaded streams and stream segments
 type Handler struct {
-	ctx      context.Context
 	copier   FileCopier
 	registry *FileRegistry
 	store    *StreamStore
 
-	playlistConfig  PlaylistConfig
+	playlistConfig PlaylistConfig
+
 	maxPlaylistSize int
 	maxSegmentSize  int
 }
 
-func NewHandler(ctx context.Context, config ServerConfig) *Handler {
+func NewHandler(config ServerConfig) *Handler {
 	return &Handler{
-		ctx:      ctx,
 		copier:   AtomicWriter{},
-		registry: NewFileRegistry(ctx),
-		store:    NewStreamStore(ctx),
+		registry: NewFileRegistry(FileRegistryConfig{}),
+		store:    NewStreamStore(StreamStoreConfig{StreamTimeout: config.StreamTimeout}),
 
 		playlistConfig: PlaylistConfig{
 			Size: config.PlaylistSize,
@@ -36,15 +34,15 @@ func NewHandler(ctx context.Context, config ServerConfig) *Handler {
 }
 
 // Wait for registry to stop
-func (h *Handler) Wait() {
-	h.store.Wait()
-	h.registry.Wait()
+func (h *Handler) Stop() {
+	h.store.Stop()
+	h.registry.Stop()
 }
 
 // Validates whether the request came from the usual origin and whether we could match a stream
 // if we got a new master playlist
 func (h *Handler) Validate(slug string, path string, origin string) error {
-	return h.store.CheckOrigin(slug, path, origin)
+	return h.store.UpdateStream(slug, path)
 }
 
 // handle file depending on extension

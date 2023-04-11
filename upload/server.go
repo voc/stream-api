@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -24,6 +25,7 @@ type ServerConfig struct {
 	OutputPath      string
 	MaxSegmentSize  int
 	MaxPlaylistSize int
+	StreamTimeout   time.Duration
 
 	PlaylistSize int
 }
@@ -33,15 +35,18 @@ type Server struct {
 	auth       Auth
 	outputPath string
 	errors     chan error
+	cancel     context.CancelFunc
 	done       sync.WaitGroup
 }
 
-func NewServer(ctx context.Context, auth Auth, config ServerConfig) *Server {
+func NewServer(auth Auth, config ServerConfig) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
-		handler:    NewHandler(ctx, config),
+		handler:    NewHandler(config),
 		auth:       auth,
 		outputPath: config.OutputPath,
 		errors:     make(chan error, 1),
+		cancel:     cancel,
 	}
 	mux := http.NewServeMux()
 	srv := http.Server{Addr: config.Addr, Handler: mux}
@@ -74,9 +79,10 @@ func NewServer(ctx context.Context, auth Auth, config ServerConfig) *Server {
 }
 
 // Wait for server to finish cleaning up
-func (s *Server) Wait() {
-	s.handler.Wait()
+func (s *Server) Stop() {
+	s.cancel()
 	s.done.Wait()
+	s.handler.Stop()
 }
 
 // The channel returned by Errors receives fatal errors

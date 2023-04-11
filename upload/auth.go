@@ -32,8 +32,13 @@ type StaticAuth struct {
 
 func NewStaticAuth(conf AuthConfig) Auth {
 	a := &StaticAuth{
-		allowedDirs: conf.AllowedDirs,
-		conf:        make(map[string]AuthConfigEntry),
+		conf: make(map[string]AuthConfigEntry),
+	}
+	for _, dir := range conf.AllowedDirs {
+		if dir[len(dir)-1] != os.PathSeparator {
+			dir += string(os.PathSeparator)
+		}
+		a.allowedDirs = append(a.allowedDirs, dir)
 	}
 	for _, entry := range conf.Users {
 		a.conf[entry.User] = entry
@@ -69,13 +74,14 @@ func (a *StaticAuth) Auth(user string, pass string, path string) (string, bool) 
 		cleanedPath = string(os.PathSeparator) + cleanedPath
 	}
 
-	// match against entry
-	if !wildcard.MatchSimple(entry.Match, cleanedPath) {
-		return "", false
-	}
-
 	// determine slug
 	parts := strings.Split(cleanedPath, string(os.PathSeparator))
 	slug := parts[1]
+
+	// match against entry
+	if !wildcard.MatchSimple(entry.Match, slug) {
+		return "", false
+	}
+
 	return slug, true
 }

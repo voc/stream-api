@@ -2,7 +2,7 @@ package util
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,7 +24,7 @@ func HandleSignal(ctx context.Context, cancel context.CancelFunc) {
 			case <-ctx.Done():
 				return
 			case s := <-c:
-				log.Println("caught signal", s)
+				fmt.Println("caught signal", s)
 				if s == syscall.SIGHUP {
 					continue
 				}

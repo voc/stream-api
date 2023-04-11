@@ -9,36 +9,61 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	// DefaultExpireInterval is the default timeout for file expiration
+	DefaultExpireInterval = 5 * time.Second
+
+	// DefaultKeepDelay
+	DefaultKeepDelay = 10 * time.Second
+)
+
 type FileEntry struct {
 	path     string          // path to the file
 	deadline time.Time       // deadline for file deletion
 	keep     <-chan struct{} // keep file as long as channel is active
 }
 
-// FileRegistry stores file paths+deadlines and removes the corresponding files when the deadline is reached
-type FileRegistry struct {
-	files map[string]*FileEntry
-	add   chan *FileEntry
-	done  sync.WaitGroup
+type FileRegistryConfig struct {
+	ExpireInterval time.Duration
+	KeepDelay      time.Duration
 }
 
-func NewFileRegistry(ctx context.Context) *FileRegistry {
+// FileRegistry stores file paths+deadlines and removes the corresponding files when the deadline is reached
+type FileRegistry struct {
+	config FileRegistryConfig
+	files  map[string]*FileEntry
+	add    chan *FileEntry
+	done   sync.WaitGroup
+	cancel context.CancelFunc
+}
+
+func NewFileRegistry(config FileRegistryConfig) *FileRegistry {
+	if config.ExpireInterval == 0 {
+		config.ExpireInterval = DefaultExpireInterval
+	}
+	if config.KeepDelay == 0 {
+		config.KeepDelay = DefaultKeepDelay
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	r := &FileRegistry{
-		files: make(map[string]*FileEntry),
-		add:   make(chan *FileEntry, 1),
+		config: config,
+		files:  make(map[string]*FileEntry),
+		add:    make(chan *FileEntry, 1),
+		cancel: cancel,
 	}
 	r.done.Add(1)
 	go r.run(ctx)
 	return r
 }
 
-func (r *FileRegistry) Wait() {
+func (r *FileRegistry) Stop() {
+	r.cancel()
 	r.done.Wait()
 }
 
 func (r *FileRegistry) run(ctx context.Context) {
 	defer r.done.Done()
-	ticker := time.NewTicker(time.Second * 2)
+	ticker := time.NewTicker(r.config.ExpireInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -48,6 +73,7 @@ func (r *FileRegistry) run(ctx context.Context) {
 		case <-ticker.C:
 			r.expire()
 		case new := <-r.add:
+			// avoid dropping keep channel
 			if entry, ok := r.files[new.path]; ok {
 				if new.keep == nil && entry.keep != nil {
 					continue
@@ -75,8 +101,8 @@ func (r *FileRegistry) expire() {
 		if entry.keep != nil {
 			select {
 			case <-entry.keep:
-				// expire a few seconds from now
-				entry.deadline = time.Now().Add(time.Second * 10)
+				// expire a while from now
+				entry.deadline = time.Now().Add(r.config.KeepDelay)
 				entry.keep = nil
 				log.Debug().Msgf("keep expired %s", entry.path)
 			default:
