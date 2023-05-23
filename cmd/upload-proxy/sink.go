@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sync"
@@ -10,27 +11,50 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const DefaultQueueSize = 128
+
+type SinkConfig struct {
+	Address   string
+	Username  string
+	Password  string
+	QueueSize int `toml:"queue-size"`
+}
+
 type Sink struct {
-	Address  string
-	URL      url.URL
-	Username string
-	Password string
-	queue    chan *http.Request
-	done     sync.WaitGroup
+	conf  SinkConfig
+	url   url.URL
+	queue chan *http.Request
+	done  sync.WaitGroup
+}
+
+func NewSink(conf SinkConfig) (*Sink, error) {
+	if conf.QueueSize == 0 {
+		conf.QueueSize = DefaultQueueSize
+	}
+
+	url, err := url.Parse(conf.Address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid sink address: %w", err)
+	}
+	return &Sink{
+		conf:  conf,
+		url:   *url,
+		queue: make(chan *http.Request, conf.QueueSize),
+	}, nil
 }
 
 func (sink *Sink) start(ctx context.Context, client *http.Client, numWorkers int) {
+	sink.done.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		sink.done.Add(1)
 		go sink.work(ctx, client)
 	}
 }
 
 func (sink *Sink) handle(req *http.Request) {
-	req.URL.Scheme = sink.URL.Scheme
-	req.URL.Host = sink.URL.Host
-	req.URL.Path, req.URL.RawPath = joinURLPath(&sink.URL, req.URL)
-	req.SetBasicAuth(sink.Username, sink.Password)
+	req.URL.Scheme = sink.url.Scheme
+	req.URL.Host = sink.url.Host
+	req.URL.Path, req.URL.RawPath = joinURLPath(&sink.url, req.URL)
+	req.SetBasicAuth(sink.conf.Username, sink.conf.Password)
 	req.Response = nil
 	req.RequestURI = ""
 outer:
@@ -41,7 +65,7 @@ outer:
 		default:
 			// drop front of queue
 			<-sink.queue
-			log.Info().Str("sink", sink.URL.Host).Msg("queue overflow")
+			log.Info().Str("sink", sink.url.Host).Msg("queue overflow")
 			continue
 		}
 	}
@@ -62,19 +86,19 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 			for {
 				select {
 				case <-req.Context().Done():
-					log.Warn().Str("sink", sink.URL.Host).Msg("discarding timed out request")
+					log.Warn().Str("sink", sink.url.Host).Msg("discarding timed out request")
 					break retry
 				default:
 				}
 				res, err := client.Do(req)
 				if err != nil {
-					log.Error().Str("sink", sink.URL.Host).Err(err).Msg("sink error")
+					log.Error().Str("sink", sink.url.Host).Err(err).Msg("sink error")
 					break retry
 				}
 				res.Body.Close()
 				if res.StatusCode != 200 {
 					log.Warn().
-						Str("sink", sink.URL.Host).
+						Str("sink", sink.url.Host).
 						Str("method", req.Method).
 						Str("path", req.URL.Path).
 						Str("status", res.Status).

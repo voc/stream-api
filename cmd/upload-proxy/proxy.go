@@ -22,9 +22,10 @@ type Proxy struct {
 	client *http.Client
 	ctx    context.Context
 	done   sync.WaitGroup
+	addr   string
 }
 
-func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
+func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 	tr := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -43,21 +44,23 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 		ctx:    ctx,
 	}
 
-	for _, sink := range p.sinks {
-		sink.queue = make(chan *http.Request, 128)
-	}
-
 	mux := http.NewServeMux()
 	srv := http.Server{Addr: addr, Handler: mux}
 
 	// set routes
 	mux.HandleFunc("/", p.HandleUpload)
 
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	p.addr = ln.Addr().String()
+
 	// run server
 	p.done.Add(1)
 	go func() {
 		defer p.done.Done()
-		err := srv.ListenAndServe()
+		err := srv.Serve(ln)
 		if !errors.Is(err, http.ErrServerClosed) {
 			p.errors <- err
 		}
@@ -82,7 +85,7 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) *Proxy {
 		sink.start(ctx, p.client, 1)
 	}
 
-	return p
+	return p, nil
 }
 
 // Wait for server to finish
@@ -174,4 +177,8 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		sink.handle(req)
 	}
 	w.WriteHeader(200)
+}
+
+func (p *Proxy) Address() string {
+	return p.addr
 }

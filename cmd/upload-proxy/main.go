@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"net/url"
+	"fmt"
 	"os"
 
 	"github.com/pelletier/go-toml"
@@ -11,6 +11,35 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/voc/stream-api/util"
 )
+
+func run(parentCtx context.Context, conf *Config) error {
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+	var sinks []*Sink
+	for _, sinkConfig := range conf.Sinks {
+		sink, err := NewSink(sinkConfig)
+		if err != nil {
+			return fmt.Errorf("sink init failed: %w", err)
+		}
+		sinks = append(sinks, sink)
+		log.Info().Str("sink", sink.url.Host).Str("basePath", sink.url.Path).Msg("added sink")
+	}
+	proxy, err := NewProxy(ctx, conf.ListenAddress, sinks)
+	if err != nil {
+		return fmt.Errorf("proxy init failed: %w", err)
+	}
+	log.Info().Msgf("listening on %s", conf.ListenAddress)
+
+	select {
+	case <-ctx.Done():
+	case err := <-proxy.Errors():
+		log.Error().Err(err).Msg("server failed")
+		cancel()
+	}
+
+	proxy.Wait()
+	return nil
+}
 
 func main() {
 	conf := Config{}
@@ -37,24 +66,9 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("config parse failed")
 	}
-	for _, sink := range conf.Sinks {
-		url, err := url.Parse(sink.Address)
-		if err != nil {
-			log.Error().Str("address", sink.Address).Msg("invalid address")
-			continue
-		}
-		sink.URL = *url
-		log.Info().Str("sink", sink.URL.Host).Str("basePath", sink.URL.Path).Msg("added sink")
-	}
-	proxy := NewProxy(ctx, conf.ListenAddress, conf.Sinks)
-	log.Info().Msgf("listening on %s", conf.ListenAddress)
 
-	select {
-	case <-ctx.Done():
-	case err := <-proxy.Errors():
-		log.Error().Err(err).Msg("server failed")
-		cancel()
+	// Run proxy
+	if run(ctx, &conf); err != nil {
+		log.Fatal().Err(err)
 	}
-
-	proxy.Wait()
 }
