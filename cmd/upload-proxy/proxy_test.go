@@ -11,8 +11,9 @@ import (
 	"time"
 )
 
-// Proxy upload smoke test
+// Test proxy upload
 func TestUpload(t *testing.T) {
+	t.Parallel()
 	ch := make(chan *http.Request, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

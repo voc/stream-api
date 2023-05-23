@@ -16,6 +16,9 @@ func run(parentCtx context.Context, conf *Config) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	var sinks []*Sink
+	if len(conf.Sinks) == 0 {
+		log.Warn().Msg("no sinks configured")
+	}
 	for _, sinkConfig := range conf.Sinks {
 		sink, err := NewSink(sinkConfig)
 		if err != nil {
