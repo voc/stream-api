@@ -12,11 +12,18 @@ import (
 const (
 	DefaultStreamTimeout        = time.Second * 10
 	DefaultStreamExpireInterval = time.Second * 2
+	DefaultStreamOriginDuration = time.Second * 6
 )
 
 type StreamStoreConfig struct {
-	StreamTimeout        time.Duration
+	// how long a stream can be idle (no input) before being removed
+	StreamTimeout time.Duration
+
+	// how often to expire old streams
 	StreamExpireInterval time.Duration
+
+	// for how long to keep the stream origin, after no more data is received
+	StreamOriginDuration time.Duration
 }
 
 type StreamStore struct {
@@ -35,6 +42,9 @@ func NewStreamStore(config StreamStoreConfig) *StreamStore {
 	}
 	if config.StreamExpireInterval == 0 {
 		config.StreamExpireInterval = DefaultStreamExpireInterval
+	}
+	if config.StreamOriginDuration == 0 {
+		config.StreamOriginDuration = DefaultStreamOriginDuration
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &StreamStore{
@@ -107,7 +117,7 @@ func (s *StreamStore) UpdateStream(slug string, origin string) error {
 	stream, ok := s.data[slug]
 	if !ok {
 		s.log.Info().Str("slug", slug).Msg("registering stream")
-		stream = NewStream(s.config.StreamTimeout)
+		stream = NewStream(s.config.StreamTimeout, s.config.StreamOriginDuration)
 		s.data[slug] = stream
 	}
 

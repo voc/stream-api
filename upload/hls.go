@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/quangngotan95/go-m3u8/m3u8"
+	"github.com/rs/zerolog/log"
 )
 
 type HLSParser struct {
@@ -99,17 +100,25 @@ func (h *HLSParser) ParsePlaylist(path string, reader io.Reader) error {
 		return nil
 	}
 
-	// lookup playlist by path
-	v, err := h.getVariantPlaylist(path)
+	out, err := h.processVariant(path, playlist)
 	if err != nil {
 		return err
 	}
-	h.checkDiscontinuity(v, playlist)
-	h.appendItems(v, playlist)
-	v.output.setSegmentTarget(playlist.Target)
 
 	// write to disk
-	return h.writePlaylist(path, &v.output.Playlist)
+	return h.writePlaylist(path, out)
+}
+
+func (h *HLSParser) processVariant(path string, playlist *m3u8.Playlist) (*m3u8.Playlist, error) {
+	// lookup playlist by path
+	v, err := h.getVariantPlaylist(path)
+	if err != nil {
+		return nil, err
+	}
+	h.checkDiscontinuity(v, playlist, path)
+	h.appendItems(v, playlist)
+	v.output.setSegmentTarget(playlist.Target)
+	return &v.output.Playlist, nil
 }
 
 // Beware special VOC hack:
@@ -172,7 +181,6 @@ func fixupCodecInformation(playlist *m3u8.Playlist) {
 		if !ok {
 			continue
 		}
-		fmt.Printf("fixupCodecInformation: %s\n", media.String())
 		if media.Codecs == nil {
 			// Pretend we have H264 High level 4.0 video and AAC audio
 			media.Codecs = &([]string{"avc1.640828,mp4a.40.2"}[0])
@@ -198,10 +206,15 @@ func (h *HLSParser) getVariantPlaylist(path string) (*VariantPlaylist, error) {
 }
 
 // compare sequence with last iteration and check for discontinuity
-func (h *HLSParser) checkDiscontinuity(v *VariantPlaylist, source *m3u8.Playlist) {
+func (h *HLSParser) checkDiscontinuity(v *VariantPlaylist, source *m3u8.Playlist, path string) {
 	// if our segments went backwards
-	if source.Sequence < v.lastSequence {
+	newSegments := source.Sequence + source.SegmentSize()
+	oldSegments := v.lastSequence + v.lastSize
+
+	if newSegments < oldSegments {
+		log.Warn().Str("slug", h.slug).Int("last", oldSegments).Int("current", newSegments).Str("path", path).Msg("sequence went backwards, inserting discontinuity")
 		res := v.output.applyDiscontinuity()
+		// if the playlist is full we need to move the last segment out of the way
 		switch deleted := res.(type) {
 		case *m3u8.SegmentItem:
 			h.expireFile(deleted.Segment)

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +26,12 @@ type ServerConfig struct {
 	OutputPath      string
 	MaxSegmentSize  int
 	MaxPlaylistSize int
-	StreamTimeout   time.Duration
+
+	// how long to keep a streams files around after the last push
+	StreamTimeout time.Duration
+
+	// how long to keep a stream exclusive to an origin
+	StreamOriginDuration time.Duration
 
 	PlaylistSize int
 }
@@ -104,26 +110,35 @@ func (s *Server) HandleUpload(w http.ResponseWriter, req *http.Request) {
 
 	slug, ok := s.authenticate(w, req)
 	if !ok {
+		log.Debug().Str("method", req.Method).Str("path", req.URL.Path).Msg("deny auth")
 		w.WriteHeader(401)
 		_, _ = io.WriteString(w, "Unauthorized")
 		return
 	}
 
 	path := filepath.Join(s.outputPath, req.URL.Path)
-	host, _, err := net.SplitHostPort(req.RemoteAddr)
-	if err != nil {
-		fail(w, err)
-		return
+	var host string
+	var err error
+	if req.Header.Get("X-Forwarded-For") != "" {
+		host = strings.Split(req.Header["X-Forwarded-For"][0], ",")[0]
+	} else {
+		host, _, err = net.SplitHostPort(req.RemoteAddr)
+		if err != nil {
+			fail(w, err)
+			return
+		}
 	}
+
 	if err := s.handler.Validate(slug, path, host); err != nil {
 		w.WriteHeader(403)
 		msg := fmt.Sprintf("Request blocked: %s", err.Error())
-		log.Debug().Msg(msg)
+		log.Debug().Str("slug", slug).Str("upload-host", host).Msg(msg)
 		_, _ = io.WriteString(w, msg)
 		return
 	}
 
 	if req.Method == "PUT" || req.Method == "POST" {
+		log.Debug().Str("method", req.Method).Str("path", req.URL.Path).Msg("upload")
 		err := s.handler.HandleFile(req.Body, slug, path)
 		if err != nil {
 			fail(w, err)

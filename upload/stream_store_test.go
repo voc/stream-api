@@ -12,6 +12,7 @@ func TestUpdateStream(t *testing.T) {
 	s := NewStreamStore(StreamStoreConfig{
 		StreamTimeout:        time.Millisecond * 100,
 		StreamExpireInterval: time.Millisecond * 50,
+		StreamOriginDuration: time.Millisecond * 50,
 	})
 	defer s.Stop()
 
@@ -29,6 +30,7 @@ func TestPreventMultipleOrigin(t *testing.T) {
 	s := NewStreamStore(StreamStoreConfig{
 		StreamTimeout:        time.Millisecond * 200,
 		StreamExpireInterval: time.Millisecond * 50,
+		StreamOriginDuration: time.Millisecond * 100,
 	})
 	defer s.Stop()
 
@@ -40,4 +42,15 @@ func TestPreventMultipleOrigin(t *testing.T) {
 
 	// allow after sufficient time has passed
 	assert.NilError(t, s.UpdateStream("test", "bar.com"))
+}
+
+func TestAllowMultipleStream(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStore(StreamStoreConfig{})
+	defer s.Stop()
+
+	// prevent multiple parallel origins
+	assert.NilError(t, s.UpdateStream("s1", "foo.com"))
+	assert.NilError(t, s.UpdateStream("s2", "bar.com"))
+	assert.NilError(t, s.UpdateStream("s3", "baz.com"))
 }

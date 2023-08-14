@@ -41,3 +41,23 @@ func TestStaticAuth(t *testing.T) {
 		})
 	}
 }
+
+func TestAuth(t *testing.T) {
+	path := "/hls/s2/segment_SD108.ts"
+	username := "uploader"
+	password := "uploader"
+
+	a := NewStaticAuth(AuthConfig{
+		AllowedDirs: []string{"/hls/"},
+		Users:       []AuthConfigEntry{{"*", "uploader", "uploader"}},
+	})
+
+	gotSlug, gotOk := a.Auth(username, password, path)
+	if gotOk != true {
+		t.Errorf("StaticAuth.Auth() ok = %v, want %v", gotOk, true)
+	}
+
+	if gotSlug != "s2" {
+		t.Errorf("StaticAuth.Auth() slug = %v, want %v", gotSlug, "s2")
+	}
+}

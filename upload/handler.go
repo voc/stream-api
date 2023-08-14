@@ -23,7 +23,7 @@ func NewHandler(config ServerConfig) *Handler {
 	return &Handler{
 		copier:   AtomicWriter{},
 		registry: NewFileRegistry(FileRegistryConfig{}),
-		store:    NewStreamStore(StreamStoreConfig{StreamTimeout: config.StreamTimeout}),
+		store:    NewStreamStore(StreamStoreConfig{StreamTimeout: config.StreamTimeout, StreamOriginDuration: config.StreamOriginDuration}),
 
 		playlistConfig: PlaylistConfig{
 			Size: config.PlaylistSize,
@@ -42,7 +42,7 @@ func (h *Handler) Stop() {
 // Validates whether the request came from the usual origin and whether we could match a stream
 // if we got a new master playlist
 func (h *Handler) Validate(slug string, path string, origin string) error {
-	return h.store.UpdateStream(slug, path)
+	return h.store.UpdateStream(slug, origin)
 }
 
 // handle file depending on extension

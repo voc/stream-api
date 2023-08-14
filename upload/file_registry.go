@@ -104,7 +104,6 @@ func (r *FileRegistry) expire() {
 				// expire a while from now
 				entry.deadline = time.Now().Add(r.config.KeepDelay)
 				entry.keep = nil
-				log.Debug().Msgf("keep expired %s", entry.path)
 			default:
 			}
 			continue
