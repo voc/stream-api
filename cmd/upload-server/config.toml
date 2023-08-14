@@ -1,14 +1,26 @@
 [server]
-addr = ":8080"
-outputPath = "/tmp/upload"
+# Address to listen on
+#addr = "localhost:8080"
 
-# output playlist size
-playlistSize = 3
+# Path to store uploaded files
+#outputPath = "/tmp/upload"
+
+# Output playlist size
+#playlistSize = 10
+
+# Time a stream will be kept alive after the last file is uploaded
+#streamTimeout = "15m"
+
+# Time a stream origin has exclusive permission to upload for a stream
+#streamOriginDuration = "6s"
 
 [auth]
+# Directories within outputPath that files can be uploaded to
 allowedDirs = ["/hls", "/dash", "/thumbnail"]
 
+# Users that can upload files
 [[auth.users]]
+# matches the upload path
 match = "*"
 pass = "foobar123"
 user = "foo"
