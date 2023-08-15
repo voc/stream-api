@@ -1,7 +1,7 @@
 package upload
 
 import (
-	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"time"
@@ -49,7 +49,7 @@ func (h *Handler) Validate(slug string, path string, origin string) error {
 func (h *Handler) HandleFile(input io.Reader, slug string, outputPath string) error {
 	stream := h.store.GetStream(slug)
 	if stream == nil {
-		return errors.New("unknown stream")
+		return fmt.Errorf("unknown stream %s", slug)
 	}
 
 	// keep track of directory
@@ -76,12 +76,12 @@ func (h *Handler) HandleFile(input io.Reader, slug string, outputPath string) er
 	case ".jpg":
 		fallthrough
 	case ".jpeg":
-		h.registry.KeepFile(dir, stream.alive)
+		h.registry.KeepFile(outputPath, stream.alive)
 		fallthrough
 
 	default:
 		// write file and add basic expiry
-		h.registry.RegisterFile(outputPath, time.Now().Add(time.Second*10))
+		h.registry.RegisterFile(outputPath, time.Now().Add(time.Second*30))
 		src := LimitReads(input, int64(h.maxSegmentSize))
 		err = h.copier.CopyFile(outputPath, src)
 	}
