@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"time"
@@ -17,7 +16,7 @@ import (
 )
 
 func decodeJSON(rd io.Reader, out interface{}) error {
-	content, err := ioutil.ReadAll(io.LimitReader(rd, 1048576))
+	content, err := io.ReadAll(io.LimitReader(rd, 1048576))
 	if err != nil {
 		return err
 	}

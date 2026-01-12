@@ -1,9 +1,16 @@
 # [[sinks]]
 # address = "https://live.ber.c3voc.de/upload/"
-# username = "foo"
-# password = "foobar123"
+# username = "uploader"
+# password = "HHRB_J5SMW.3GwiSP85-bTHK)"
 
 [[sinks]]
-address = "http://localhost:8080/"
-username = "foo"
-password = "foobar123"
+address="https://0059c2fbe6ad7a85.mediapackage.eu-west-1.amazonaws.com/in/v2/f171fad57576469a9967e162df45c314/f171fad57576469a9967e162df45c314/channel"
+username = "4c72b3b33c194a7ea2bcd8a04f678994"
+password = "a64805c7570f46b1b7723d7c8daf1072"
+auth-type = "digest"
+# address="https://ssj51b-1.ingest.fd2vxr.mediapackagev2.eu-west-1.amazonaws.com/in/v1/til-demo/1/til-cloud-intercom-demo/index"
+
+# [[sinks]]
+# address = "http://localhost:8080/"
+# username = "foo"
+# password = "foobar123"

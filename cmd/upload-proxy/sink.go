@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/icholy/digest"
 	"github.com/rs/zerolog/log"
 )
 
@@ -17,8 +18,17 @@ type SinkConfig struct {
 	Address   string
 	Username  string
 	Password  string
-	QueueSize int `toml:"queue-size"`
+	AuthType  AuthType `toml:"auth-type"`
+	QueueSize int      `toml:"queue-size"`
 }
+
+type AuthType string
+
+const (
+	AuthTypeNone   AuthType = "none"
+	AuthTypeBasic  AuthType = "basic"
+	AuthTypeDigest AuthType = "digest"
+)
 
 type Sink struct {
 	conf  SinkConfig
@@ -43,10 +53,21 @@ func NewSink(conf SinkConfig) (*Sink, error) {
 	}, nil
 }
 
-func (sink *Sink) start(ctx context.Context, client *http.Client, numWorkers int) {
+func (sink *Sink) start(ctx context.Context, transport *http.Transport, numWorkers int) {
 	sink.done.Add(numWorkers)
+	cli := &http.Client{Transport: transport}
+	if sink.conf.AuthType == AuthTypeDigest {
+		cli = &http.Client{
+			Transport: &digest.Transport{
+				Username:  sink.conf.Username,
+				Password:  sink.conf.Password,
+				Transport: transport,
+			},
+		}
+	}
+
 	for i := 0; i < numWorkers; i++ {
-		go sink.work(ctx, client)
+		go sink.work(ctx, cli)
 	}
 }
 
@@ -54,7 +75,9 @@ func (sink *Sink) handle(req *http.Request) {
 	req.URL.Scheme = sink.url.Scheme
 	req.URL.Host = sink.url.Host
 	req.URL.Path, req.URL.RawPath = joinURLPath(&sink.url, req.URL)
-	req.SetBasicAuth(sink.conf.Username, sink.conf.Password)
+	if sink.conf.AuthType == AuthTypeBasic {
+		req.SetBasicAuth(sink.conf.Username, sink.conf.Password)
+	}
 	req.Response = nil
 	req.RequestURI = ""
 outer:
@@ -96,7 +119,7 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 					break retry
 				}
 				res.Body.Close()
-				if res.StatusCode != 200 {
+				if res.StatusCode < 200 || res.StatusCode > 299 {
 					log.Warn().
 						Str("sink", sink.url.Host).
 						Str("method", req.Method).

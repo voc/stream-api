@@ -7,9 +7,8 @@ import (
 
 // prefixes
 const (
-	TranscoderPrefix     = "service/transcode/"
+	TranscoderPrefix     = "transcoders/"
 	SourcePrefix         = "service/source/"
-	FanoutPrefix         = "service/fanout/"
 	StreamPrefix         = "stream/"
 	StreamSettingsPrefix = "streamSettings/"
 	servicePrefix        = "service/"
@@ -23,6 +22,15 @@ func ParseServiceName(path string) string {
 	}
 
 	return parts[2]
+}
+
+func ParseTranscoderName(path string) (string, bool) {
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 {
+		return "", false
+	}
+
+	return parts[1], true
 }
 
 func ParseStreamName(path string) string {

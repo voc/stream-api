@@ -4,10 +4,10 @@ import (
 	// "crypto/tls"
 	"context"
 	"flag"
+	"net/http"
 	"os"
 	"os/signal"
 
-	"net/http"
 	_ "net/http/pprof"
 
 	"github.com/rs/zerolog"
@@ -16,6 +16,7 @@ import (
 	"github.com/Showmax/go-fqdn"
 	"github.com/voc/stream-api/client"
 	"github.com/voc/stream-api/config"
+	"github.com/voc/stream-api/monitor"
 	"github.com/voc/stream-api/publish"
 	"github.com/voc/stream-api/transcode"
 )
@@ -120,10 +121,10 @@ func main() {
 	}()
 
 	// setup monitor
-	// if cfg.Monitor.Enable {
-	// 	log.Debug().Msgf("Creating monitor %v", cfg.Monitor)
-	// 	services = append(services, monitor.New(ctx, cfg.Monitor, cli))
-	// }
+	if cfg.Monitor.Enable {
+		log.Debug().Msgf("Creating monitor %v", cfg.Monitor)
+		services = append(services, monitor.New(ctx, cfg.Monitor, cli))
+	}
 
 	// setup publisher
 	if cfg.Publisher.Enable {

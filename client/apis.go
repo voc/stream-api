@@ -40,16 +40,11 @@ type Field struct {
 }
 
 type KVAPI interface {
-	// Get(ctx context.Context, key string) ([]byte, error)
-	// GetWithPrefix(ctx context.Context, prefix string) ([]Field, error)
+	Get(ctx context.Context, key string) ([]byte, error)
+	GetWithPrefix(ctx context.Context, prefix string) ([]Field, error)
 	Put(ctx context.Context, key string, value []byte) error
 	PutWithSession(ctx context.Context, key string, value []byte) error
 	Delete(ctx context.Context, key string) error
-}
-
-type KeepaliveAPI interface {
-	RefreshLease(ctx context.Context, id LeaseID) error
-	RevokeLease(ctx context.Context, id LeaseID) error
 }
 
 type ServiceAPI interface {

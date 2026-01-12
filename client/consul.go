@@ -82,8 +82,14 @@ func (c *ConsulKV) Value() []byte {
 
 // }
 
-// helper method
-func optsWithTimeout(parentCtx context.Context, timeout time.Duration) (*api.WriteOptions, context.CancelFunc) {
+// helper methods
+func queryOptsWithTimeout(parentCtx context.Context, timeout time.Duration) (*api.QueryOptions, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	opts := &api.QueryOptions{}
+	return opts.WithContext(ctx), cancel
+}
+
+func writeOptsWithTimeout(parentCtx context.Context, timeout time.Duration) (*api.WriteOptions, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	opts := &api.WriteOptions{}
 	return opts.WithContext(ctx), cancel
@@ -92,7 +98,7 @@ func optsWithTimeout(parentCtx context.Context, timeout time.Duration) (*api.Wri
 func (cc *ConsulClient) Close() {
 	// destroy session
 	session := cc.client.Session()
-	opts, cancel := optsWithTimeout(context.Background(), time.Second)
+	opts, cancel := writeOptsWithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := session.Destroy(cc.sessionId, opts)
 	if err != nil {
@@ -190,10 +196,38 @@ func (cc *ConsulClient) makeWatchHandler(ch UpdateChan) watch.HybridHandlerFunc 
 // kv put
 func (cc *ConsulClient) Put(ctx context.Context, key string, value []byte) error {
 	p := &api.KVPair{Key: key, Value: value}
-	opts, cancel := optsWithTimeout(ctx, time.Second)
+	opts, cancel := writeOptsWithTimeout(ctx, time.Second)
 	defer cancel()
 	_, err := cc.client.KV().Put(p, opts)
 	return err
+}
+
+// kv put
+func (cc *ConsulClient) Get(ctx context.Context, key string) ([]byte, error) {
+	opts, cancel := queryOptsWithTimeout(ctx, time.Second)
+	defer cancel()
+	res, _, err := cc.client.KV().Get(key, opts)
+	if err != nil {
+		return nil, err
+	}
+	return res.Value, nil
+}
+
+func (cc *ConsulClient) GetWithPrefix(ctx context.Context, prefix string) ([]Field, error) {
+	opts, cancel := queryOptsWithTimeout(ctx, time.Second)
+	defer cancel()
+	res, _, err := cc.client.KV().List(prefix, opts)
+	if err != nil {
+		return nil, err
+	}
+	var fields []Field
+	for _, kv := range res {
+		fields = append(fields, Field{
+			Key:   []byte(kv.Key),
+			Value: kv.Value,
+		})
+	}
+	return fields, nil
 }
 
 // kv put with expiring session
@@ -207,7 +241,7 @@ func (e *ErrAlreadyAquired) Error() string {
 
 func (cc *ConsulClient) PutWithSession(ctx context.Context, key string, value []byte) error {
 	p := &api.KVPair{Key: key, Value: value, Session: cc.sessionId}
-	opts, cancel := optsWithTimeout(ctx, time.Second)
+	opts, cancel := writeOptsWithTimeout(ctx, time.Second)
 	defer cancel()
 	success, _, err := cc.client.KV().Acquire(p, opts)
 	if !success {
@@ -223,7 +257,7 @@ func (cc *ConsulClient) PutWithSession(ctx context.Context, key string, value []
 
 // kv delete with expiring session
 func (cc *ConsulClient) Delete(ctx context.Context, key string) error {
-	opts, cancel := optsWithTimeout(ctx, time.Second)
+	opts, cancel := writeOptsWithTimeout(ctx, time.Second)
 	defer cancel()
 	_, err := cc.client.KV().Delete(key, opts)
 	if err != nil {

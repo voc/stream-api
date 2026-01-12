@@ -7,7 +7,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/voc/stream-api/client"
-	"github.com/voc/stream-api/fanout"
 	"github.com/voc/stream-api/stream"
 	"github.com/voc/stream-api/transcode"
 )
@@ -24,17 +23,12 @@ type streamTranscodersJson struct {
 	StreamTranscoders map[string]string `json:"streamTranscoders"`
 }
 
-type fanoutsJson struct {
-	Fanouts map[string]fanout.FanoutStatus `json:"fanouts"`
-}
-
 type watcher struct {
 	api  client.WatchAPI
 	done sync.WaitGroup
 
 	// local state
 	transcoders       map[string]*transcode.TranscoderStatus
-	fanouts           map[string]*fanout.FanoutStatus
 	streams           map[string]*stream.Stream
 	streamTranscoders map[string]string
 
@@ -44,7 +38,6 @@ type watcher struct {
 func newWatcher(ctx context.Context, api client.ServiceAPI) *watcher {
 	t := &watcher{
 		api:               api,
-		fanouts:           make(map[string]*fanout.FanoutStatus),
 		transcoders:       make(map[string]*transcode.TranscoderStatus),
 		streams:           make(map[string]*stream.Stream),
 		streamTranscoders: make(map[string]string),
@@ -77,11 +70,6 @@ func (w *watcher) run(parentContext context.Context) {
 		log.Fatal().Err(err).Msg("transcoder watch")
 		return
 	}
-	fanoutChan, err := w.api.Watch(ctx, client.FanoutPrefix)
-	if err != nil {
-		log.Fatal().Err(err).Msg("fanout watch")
-		return
-	}
 	streamChan, err := w.api.Watch(ctx, client.StreamPrefix)
 	if err != nil {
 		log.Fatal().Err(err).Msg("stream watch")
@@ -98,14 +86,6 @@ func (w *watcher) run(parentContext context.Context) {
 			}
 			for _, update := range updates {
 				w.handleTranscoder(update)
-			}
-		case updates, ok := <-fanoutChan:
-			if !ok {
-				log.Fatal().Msg("fanout watch closed")
-				return
-			}
-			for _, update := range updates {
-				w.handleFanout(update)
 			}
 		case updates, ok := <-streamChan:
 			if !ok {
@@ -131,7 +111,7 @@ func (w *watcher) handleTranscoder(update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
 	}
-	name := client.ParseServiceName(string(update.KV.Key))
+	name := client.ParseServiceName(string(update.KV.Key()))
 	if name == "" {
 		return
 	}
@@ -139,7 +119,7 @@ func (w *watcher) handleTranscoder(update *client.WatchUpdate) {
 	switch update.Type {
 	case client.UpdateTypePut:
 		var status transcode.TranscoderStatus
-		err := json.Unmarshal(update.KV.Value, &status)
+		err := json.Unmarshal(update.KV.Value(), &status)
 		if err != nil {
 			log.Error().Err(err).Msg("transcoder unmarshal")
 			return
@@ -157,43 +137,12 @@ func (w *watcher) handleTranscoder(update *client.WatchUpdate) {
 	w.sendUpdate("transcoders", tmp)
 }
 
-// handleFanout handles an etcd fanout update
-func (w *watcher) handleFanout(update *client.WatchUpdate) {
-	if update.KV == nil {
-		return
-	}
-	name := client.ParseServiceName(string(update.KV.Key))
-	if name == "" {
-		return
-	}
-
-	switch update.Type {
-	case client.UpdateTypePut:
-		var status fanout.FanoutStatus
-		err := json.Unmarshal(update.KV.Value, &status)
-		if err != nil {
-			log.Error().Err(err).Msg("fanout unmarshal")
-			return
-		}
-		w.fanouts[name] = &status
-	case client.UpdateTypeDelete:
-		delete(w.fanouts, name)
-	}
-	log.Debug().Msgf("monitor/fanouts %v", w.fanouts)
-
-	tmp := make(map[string]fanout.FanoutStatus)
-	for k, v := range w.fanouts {
-		tmp[k] = *v
-	}
-	w.sendUpdate("fanouts", tmp)
-}
-
 // handleStream handles an update in the etcd stream prefix
 func (w *watcher) handleStream(ctx context.Context, update *client.WatchUpdate) {
 	if update.KV == nil {
 		return
 	}
-	path := string(update.KV.Key)
+	path := string(update.KV.Key())
 	name := client.ParseStreamName(path)
 	if name == "" {
 		return
@@ -211,7 +160,7 @@ func (w *watcher) handleStreamUpdate(ctx context.Context, key string, update *cl
 	switch update.Type {
 	case client.UpdateTypePut:
 		var str stream.Stream
-		err := json.Unmarshal(update.KV.Value, &str)
+		err := json.Unmarshal(update.KV.Value(), &str)
 		if err != nil {
 			log.Error().Err(err).Msg("stream unmarshal")
 			return
@@ -234,7 +183,7 @@ func (w *watcher) handleStreamUpdate(ctx context.Context, key string, update *cl
 func (w *watcher) handleStreamTranscoder(ctx context.Context, key string, update *client.WatchUpdate) {
 	switch update.Type {
 	case client.UpdateTypePut:
-		w.streamTranscoders[key] = string(update.KV.Value)
+		w.streamTranscoders[key] = string(update.KV.Value())
 	case client.UpdateTypeDelete:
 		delete(w.streamTranscoders, key)
 	}

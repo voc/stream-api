@@ -28,7 +28,6 @@ type server struct {
 
 	// local state
 	transcoders       *transcodersJson
-	fanouts           *fanoutsJson
 	streams           *streamsJson
 	streamTranscoders *streamTranscodersJson
 	state             map[string]interface{}

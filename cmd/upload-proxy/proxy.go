@@ -17,12 +17,12 @@ import (
 )
 
 type Proxy struct {
-	sinks  []*Sink
-	errors chan error
-	client *http.Client
-	ctx    context.Context
-	done   sync.WaitGroup
-	addr   string
+	sinks     []*Sink
+	errors    chan error
+	transport *http.Transport
+	ctx       context.Context
+	done      sync.WaitGroup
+	addr      string
 }
 
 func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
@@ -38,10 +38,10 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	p := &Proxy{
-		sinks:  sinks,
-		client: &http.Client{Transport: tr},
-		errors: make(chan error, 1),
-		ctx:    ctx,
+		sinks:     sinks,
+		transport: tr,
+		errors:    make(chan error, 1),
+		ctx:       ctx,
 	}
 
 	mux := http.NewServeMux()
@@ -82,7 +82,7 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 		log.Printf("setup sink %+v\n", sink)
 
 		// if the number of workers is >1 the server would have to deal with out of order playlists
-		sink.start(ctx, p.client, 1)
+		sink.start(ctx, p.transport, 1)
 	}
 
 	return p, nil

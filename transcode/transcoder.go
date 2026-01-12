@@ -156,14 +156,10 @@ func (t *Transcoder) run(parentContext context.Context) {
 
 // publishStatus announces the transcoder to the network
 func (t *Transcoder) publishStatus(ctx context.Context) error {
-	var streams []string
-	for key := range t.services {
-		streams = append(streams, key)
-	}
 	status := &TranscoderStatus{
-		Name:     t.name,
-		Capacity: t.capacity,
-		Streams:  streams,
+		Name:       t.name,
+		Capacity:   t.capacity,
+		NumStreams: len(t.services),
 	}
 	data, err := json.Marshal(status)
 	if err != nil {
@@ -180,14 +176,15 @@ func (t *Transcoder) publishStatus(ctx context.Context) error {
 
 // handleTranscoder handles an etcd transcoder update
 func (t *Transcoder) handleTranscoder(update *client.WatchUpdate) {
+	log.Debug().Msgf("foobar?! %v", update)
 	if update.KV == nil {
 		return
 	}
-	name := client.ParseServiceName(string(update.KV.Key()))
-	// log.Debug().Msgf("got transcoder update: %v name: %s", update, name)
-	if name == "" {
+	name, ok := client.ParseTranscoderName(string(update.KV.Key()))
+	if !ok {
 		return
 	}
+	log.Debug().Msgf("got transcoder update: %v name: %s", update, name)
 
 	switch update.Type {
 	case client.UpdateTypePut:
