@@ -47,11 +47,3 @@ require (
 	golang.org/x/net v0.20.0 // indirect
 	google.golang.org/protobuf v1.32.0 // indirect
 )
-
-replace github.com/coreos/go-systemd => github.com/coreos/go-systemd/v22 v22.0.0
-
-replace github.com/coreos/bbolt => go.etcd.io/bbolt v1.3.5
-
-replace github.com/coreos/etcd => go.etcd.io/etcd v3.3.27+incompatible
-
-replace google.golang.org/grpc => google.golang.org/grpc v1.26.0
