@@ -270,7 +270,7 @@ func (p *Parser) Collect(ch chan<- prometheus.Metric) {
 var viewersDesc = prometheus.NewDesc(
 	"viewers",
 	"Current viewer count on a specific stream on this relay.",
-	[]string{"slug", "type", "quality", "meta", "transport", "variant"}, nil,
+	[]string{"stream", "type", "quality", "meta", "transport", "variant"}, nil,
 )
 
 // var countcountryDesc = prometheus.NewDesc(
