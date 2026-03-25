@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/icholy/digest"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
 )
 
@@ -33,8 +35,17 @@ const (
 type Sink struct {
 	conf  SinkConfig
 	url   url.URL
-	queue chan *http.Request
+	queue chan SinkEntry
 	done  sync.WaitGroup
+
+	cancel  context.CancelFunc
+	metrics *SinkMetrics
+}
+
+type SinkEntry struct {
+	Request  *http.Request
+	QueuedAt time.Time
+	Deadline time.Time
 }
 
 func NewSink(conf SinkConfig) (*Sink, error) {
@@ -49,12 +60,15 @@ func NewSink(conf SinkConfig) (*Sink, error) {
 	return &Sink{
 		conf:  conf,
 		url:   *url,
-		queue: make(chan *http.Request, conf.QueueSize),
+		queue: make(chan SinkEntry, conf.QueueSize),
 	}, nil
 }
 
-func (sink *Sink) start(ctx context.Context, transport *http.Transport, numWorkers int) {
-	sink.done.Add(numWorkers)
+func (sink *Sink) Start(ctx context.Context, transport *http.Transport, reg prometheus.Registerer, numWorkers int) {
+	ctx, cancel := context.WithCancel(ctx)
+	sink.cancel = cancel
+	sink.metrics = NewSinkMetrics(reg, sink.conf)
+
 	cli := &http.Client{Transport: transport}
 	if sink.conf.AuthType == AuthTypeDigest {
 		cli = &http.Client{
@@ -66,12 +80,19 @@ func (sink *Sink) start(ctx context.Context, transport *http.Transport, numWorke
 		}
 	}
 
+	sink.done.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		go sink.work(ctx, cli)
 	}
 }
 
-func (sink *Sink) handle(req *http.Request) {
+func (sink *Sink) Stop() {
+	sink.cancel()
+	sink.done.Wait()
+	sink.metrics.deregister()
+}
+
+func (sink *Sink) handle(req *http.Request, deadline time.Time) {
 	req.URL.Scheme = sink.url.Scheme
 	req.URL.Host = sink.url.Host
 	req.URL.Path, req.URL.RawPath = joinURLPath(&sink.url, req.URL)
@@ -83,7 +104,7 @@ func (sink *Sink) handle(req *http.Request) {
 outer:
 	for {
 		select {
-		case sink.queue <- req:
+		case sink.queue <- SinkEntry{Request: req, Deadline: deadline, QueuedAt: time.Now()}:
 			break outer
 		default:
 			// drop front of queue
@@ -104,16 +125,16 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 		select {
 		case <-ctx.Done():
 			return
-		case req := <-sink.queue:
+		case entry := <-sink.queue:
 		retry:
 			for {
 				select {
-				case <-req.Context().Done():
+				case <-entry.Request.Context().Done():
 					log.Warn().Str("sink", sink.url.Host).Msg("discarding timed out request")
 					break retry
 				default:
 				}
-				res, err := client.Do(req)
+				res, err := client.Do(entry.Request)
 				if err != nil {
 					log.Error().Str("sink", sink.url.Host).Err(err).Msg("sink error")
 					break retry
@@ -122,20 +143,63 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 				if res.StatusCode < 200 || res.StatusCode > 299 {
 					log.Warn().
 						Str("sink", sink.url.Host).
-						Str("method", req.Method).
-						Str("path", req.URL.Path).
+						Str("method", entry.Request.Method).
+						Str("path", entry.Request.URL.Path).
 						Str("status", res.Status).
 						Msg("upload failed")
 
 					// get new body
-					req.Body, _ = req.GetBody()
+					entry.Request.Body, _ = entry.Request.GetBody()
 
 					// retry if we have space in queue
 					time.Sleep(time.Second)
 					continue
 				}
+				// success
+				sink.metrics.totalNumUploaded.Inc()
+				sink.metrics.totalUploadDelay.Add(time.Since(entry.QueuedAt).Seconds())
 				break
 			}
 		}
 	}
+}
+
+type SinkMetrics struct {
+	reg              prometheus.Registerer
+	totalNumUploaded prometheus.Counter
+	totalUploadDelay prometheus.Counter
+	queueLength      prometheus.Gauge
+}
+
+func NewSinkMetrics(reg prometheus.Registerer, cfg SinkConfig) *SinkMetrics {
+	return &SinkMetrics{
+		reg: reg,
+		totalNumUploaded: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_uploaded_total",
+			Help: "Total number of uploaded requests",
+			ConstLabels: prometheus.Labels{
+				"sink": cfg.Address,
+			},
+		}),
+		totalUploadDelay: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_upload_delay_total",
+			Help: "Total upload delay in seconds",
+			ConstLabels: prometheus.Labels{
+				"sink": cfg.Address,
+			},
+		}),
+		queueLength: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "upload_proxy_sink_queue_length",
+			Help: "Number of entries in the sink queue",
+			ConstLabels: prometheus.Labels{
+				"sink": cfg.Address,
+			},
+		}),
+	}
+}
+
+func (m *SinkMetrics) deregister() {
+	m.reg.Unregister(m.totalNumUploaded)
+	m.reg.Unregister(m.totalUploadDelay)
+	m.reg.Unregister(m.queueLength)
 }

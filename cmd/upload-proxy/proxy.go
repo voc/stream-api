@@ -13,6 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,6 +27,7 @@ type Proxy struct {
 	ctx       context.Context
 	done      sync.WaitGroup
 	addr      string
+	metrics   *ProxyMetrics
 }
 
 func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
@@ -47,8 +52,15 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 	mux := http.NewServeMux()
 	srv := http.Server{Addr: addr, Handler: mux}
 
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	p.metrics = NewProxyMetrics(reg)
+
 	// set routes
 	mux.HandleFunc("/", p.HandleUpload)
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -82,7 +94,7 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 		log.Printf("setup sink %+v\n", sink)
 
 		// if the number of workers is >1 the server would have to deal with out of order playlists
-		sink.start(ctx, p.transport, 1)
+		sink.Start(ctx, p.transport, reg, 1)
 	}
 
 	return p, nil
@@ -94,6 +106,7 @@ func (p *Proxy) Wait() {
 	for _, sink := range p.sinks {
 		sink.wait()
 	}
+	p.metrics.deregister()
 }
 
 // The channel returned by Errors is pushed fatal errors
@@ -154,11 +167,8 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "Invalid method")
 		return
 	}
-
-	deadline := getDeadline(r.URL.Path)
-	ctx, _ := context.WithDeadline(p.ctx, deadline)
 	log.Debug().Str("method", r.Method).Str("url", r.URL.Path).Msg("handle")
-
+	uploadStart := time.Now()
 	var b bytes.Buffer
 	_, err := b.ReadFrom(r.Body)
 	if err != nil {
@@ -166,19 +176,60 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
+	p.metrics.totalReadDelay.Add(time.Since(uploadStart).Seconds())
+	p.metrics.totalNumRead.Inc()
+
 	getBody := func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(b.Bytes())), nil
 	}
 	for _, sink := range p.sinks {
-		req := r.Clone(ctx)
+		req := r.Clone(context.Background())
 		req.ContentLength = r.ContentLength
 		req.GetBody = getBody
 		req.Body, _ = getBody()
-		sink.handle(req)
+		sink.handle(req, getDeadline(r.URL.Path))
 	}
 	w.WriteHeader(200)
 }
 
 func (p *Proxy) Address() string {
 	return p.addr
+}
+
+func (p *Proxy) Describe(ch chan<- *prometheus.Desc) {
+	ch <- prometheus.NewDesc("upload_proxy_sinks", "Number of configured sinks", nil, nil)
+}
+
+func (p *Proxy) Collect(ch chan<- prometheus.Metric) {
+	ch <- prometheus.MustNewConstMetric(
+		prometheus.NewDesc("upload_proxy_sinks", "Number of configured sinks", nil, nil),
+		prometheus.GaugeValue,
+		float64(len(p.sinks)),
+	)
+}
+
+type ProxyMetrics struct {
+	reg            prometheus.Registerer
+	totalNumRead   prometheus.Counter
+	totalReadDelay prometheus.Counter
+}
+
+func NewProxyMetrics(reg prometheus.Registerer) *ProxyMetrics {
+	m := &ProxyMetrics{
+		reg: reg,
+		totalNumRead: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_read_total",
+			Help: "Total number of uploaded requests",
+		}),
+		totalReadDelay: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_read_delay_seconds_total",
+			Help: "Total upload delay in seconds",
+		}),
+	}
+	return m
+}
+
+func (m *ProxyMetrics) deregister() {
+	m.reg.Unregister(m.totalNumRead)
+	m.reg.Unregister(m.totalReadDelay)
 }
