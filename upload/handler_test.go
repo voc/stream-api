@@ -35,12 +35,12 @@ func TestHandler(t *testing.T) {
 		}),
 	}
 	defer h.Stop()
-	h.Validate("s1", "hls/s1/SD.m3u8", "source1")
+	assert.NilError(t, h.Validate("s1", "hls/s1/SD.m3u8", "source1"))
 	assert.NilError(t, h.HandleFile(nil, "s1", "thumbnail/s1/poster.jpeg"))
 	assert.NilError(t, h.HandleFile(nil, "s1", "thumbnail/s1/thumb.jpeg"))
 	time.Sleep(time.Millisecond * 50)
 
-	res, ok := h.registry.files["thumbnail/s1/thumb.jpeg"]
+	res, ok := h.registry.FileStatus(t.Context(), "thumbnail/s1/thumb.jpeg")
 	assert.Assert(t, ok)
 	assert.Assert(t, res != nil)
 	log.Println(ok, *res)

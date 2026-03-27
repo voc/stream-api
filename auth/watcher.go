@@ -70,7 +70,7 @@ func (w *watcher) handleStreamSettings(ctx context.Context, update *client.Watch
 	}
 	path := string(update.KV.Key())
 	name := client.ParseStreamName(path)
-	log.Debug().Msgf("stream settings update %v", update.KV.Value)
+	log.Debug().Msgf("stream settings update %v", update.KV.Value())
 	if name == "" {
 		return
 	}

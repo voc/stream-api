@@ -33,8 +33,14 @@ type FileRegistry struct {
 	config FileRegistryConfig
 	files  map[string]*FileEntry
 	add    chan *FileEntry
+	get    chan getEntryRequest
 	done   sync.WaitGroup
 	cancel context.CancelFunc
+}
+
+type getEntryRequest struct {
+	path  string
+	reply chan FileEntry
 }
 
 func NewFileRegistry(config FileRegistryConfig) *FileRegistry {
@@ -49,6 +55,7 @@ func NewFileRegistry(config FileRegistryConfig) *FileRegistry {
 		config: config,
 		files:  make(map[string]*FileEntry),
 		add:    make(chan *FileEntry, 1),
+		get:    make(chan getEntryRequest, 1),
 		cancel: cancel,
 	}
 	r.done.Add(1)
@@ -80,6 +87,12 @@ func (r *FileRegistry) run(ctx context.Context) {
 				}
 			}
 			r.files[new.path] = new
+		case req := <-r.get:
+			if entry, ok := r.files[req.path]; ok {
+				req.reply <- *entry
+			} else {
+				close(req.reply)
+			}
 		}
 	}
 }
@@ -135,5 +148,27 @@ func (r *FileRegistry) KeepFile(path string, keep <-chan struct{}) {
 	r.add <- &FileEntry{
 		path: path,
 		keep: keep,
+	}
+}
+
+// Mostly for testing without race condition
+func (r *FileRegistry) FileStatus(ctx context.Context, path string) (*FileEntry, bool) {
+	reply := make(chan FileEntry, 1)
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case r.get <- getEntryRequest{
+		path:  path,
+		reply: reply,
+	}:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case entry, ok := <-reply:
+		if !ok {
+			return nil, false
+		}
+		return &entry, true
 	}
 }
