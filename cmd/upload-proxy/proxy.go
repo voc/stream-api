@@ -20,6 +20,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const MaxFileSize = 50 * 1024 * 1024 // 50 MB
+
 type Proxy struct {
 	sinks     []*Sink
 	errors    chan error
@@ -118,10 +120,10 @@ func getDeadline(path string) time.Time {
 	ext := filepath.Ext(path)
 	now := time.Now()
 	switch ext {
-	case ".m3u8":
-		fallthrough
-	case ".mpd":
+	case ".m3u8", ".mpd":
 		return now.Add(time.Second * 6)
+	case ".jpg", ".jpeg":
+		return now.Add(time.Second * 20)
 	default:
 		return now.Add(time.Second * 60)
 	}
@@ -170,7 +172,7 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	log.Debug().Str("method", r.Method).Str("url", r.URL.Path).Msg("handle")
 	uploadStart := time.Now()
 	var b bytes.Buffer
-	_, err := b.ReadFrom(r.Body)
+	size, err := b.ReadFrom(http.MaxBytesReader(w, r.Body, MaxFileSize))
 	if err != nil {
 		log.Error().Err(err).Msg("read body")
 		w.WriteHeader(500)
@@ -183,8 +185,8 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return io.NopCloser(bytes.NewReader(b.Bytes())), nil
 	}
 	for _, sink := range p.sinks {
-		req := r.Clone(context.Background())
-		req.ContentLength = r.ContentLength
+		req := r.Clone(p.ctx)
+		req.ContentLength = size
 		req.GetBody = getBody
 		req.Body, _ = getBody()
 		sink.handle(req, getDeadline(r.URL.Path))

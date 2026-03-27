@@ -52,7 +52,9 @@ func NewSink(conf SinkConfig) (*Sink, error) {
 	if conf.QueueSize == 0 {
 		conf.QueueSize = DefaultQueueSize
 	}
-
+	if conf.Username != "" && (conf.AuthType != AuthTypeBasic && conf.AuthType != AuthTypeDigest) {
+		conf.AuthType = AuthTypeBasic
+	}
 	url, err := url.Parse(conf.Address)
 	if err != nil {
 		return nil, fmt.Errorf("invalid sink address: %w", err)
@@ -109,7 +111,8 @@ outer:
 		default:
 			// drop front of queue
 			<-sink.queue
-			log.Info().Str("sink", sink.url.Host).Msg("queue overflow")
+			sink.metrics.totalNumDropped.Inc()
+			log.Warn().Str("sink", sink.url.Host).Msg("queue full, dropping request")
 			continue
 		}
 	}
@@ -126,49 +129,70 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 		case <-ctx.Done():
 			return
 		case entry := <-sink.queue:
-		retry:
-			for {
-				select {
-				case <-entry.Request.Context().Done():
-					log.Warn().Str("sink", sink.url.Host).Msg("discarding timed out request")
-					break retry
-				default:
-				}
-				res, err := client.Do(entry.Request)
-				if err != nil {
-					log.Error().Str("sink", sink.url.Host).Err(err).Msg("sink error")
-					break retry
-				}
-				res.Body.Close()
-				if res.StatusCode < 200 || res.StatusCode > 299 {
-					log.Warn().
-						Str("sink", sink.url.Host).
-						Str("method", entry.Request.Method).
-						Str("path", entry.Request.URL.Path).
-						Str("status", res.Status).
-						Msg("upload failed")
-
-					// get new body
-					entry.Request.Body, _ = entry.Request.GetBody()
-
-					// retry if we have space in queue
-					time.Sleep(time.Second)
-					continue
-				}
-				// success
-				sink.metrics.totalNumUploaded.Inc()
-				sink.metrics.totalUploadDelay.Add(time.Since(entry.QueuedAt).Seconds())
-				break
-			}
+			sink.upload(ctx, entry, client)
 		}
 	}
 }
 
+func (sink *Sink) upload(ctx context.Context, entry SinkEntry, client *http.Client) {
+	for {
+		if entry.Deadline.Before(time.Now()) {
+			log.Warn().Str("sink", sink.url.Host).Msg("discarding timed out request")
+			sink.metrics.totalNumDropped.Inc()
+			return
+		}
+		queuedFor := time.Since(entry.QueuedAt)
+		uploadStart := time.Now()
+		res, err := client.Do(entry.Request)
+		if err != nil {
+			log.Error().Str("sink", sink.url.Host).Err(err).Msg("sink error")
+			sink.metrics.totalNumDropped.Inc()
+			return
+		}
+		_ = res.Body.Close()
+		if res.StatusCode < 200 || res.StatusCode > 299 {
+			log.Warn().
+				Str("sink", sink.url.Host).
+				Str("method", entry.Request.Method).
+				Str("path", entry.Request.URL.Path).
+				Str("status", res.Status).
+				Msg("upload failed")
+			sink.metrics.totalTransientErrors.Inc()
+
+			// get new body
+			entry.Request.Body, _ = entry.Request.GetBody()
+
+			// drop if queue is almost full
+			if len(sink.queue) > cap(sink.queue)-2 {
+				log.Error().Str("sink", sink.url.Host).Err(err).Msg("queue full, dropping request")
+				sink.metrics.totalNumDropped.Inc()
+				return
+			}
+			// retry after short delay
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		// success
+		sink.metrics.totalNumUploaded.Inc()
+		sink.metrics.totalQueueDelay.Add(queuedFor.Seconds())
+		sink.metrics.totalUploadDuration.Add(time.Since(uploadStart).Seconds())
+		sink.metrics.totalBytesUploaded.Add(float64(entry.Request.ContentLength))
+		return
+	}
+}
+
 type SinkMetrics struct {
-	reg              prometheus.Registerer
-	totalNumUploaded prometheus.Counter
-	totalUploadDelay prometheus.Counter
-	queueLength      prometheus.Gauge
+	reg                  prometheus.Registerer
+	totalNumUploaded     prometheus.Counter
+	totalNumDropped      prometheus.Counter
+	totalQueueDelay      prometheus.Counter
+	totalUploadDuration  prometheus.Counter
+	totalBytesUploaded   prometheus.Counter
+	totalTransientErrors prometheus.Counter
 }
 
 func NewSinkMetrics(reg prometheus.Registerer, cfg SinkConfig) *SinkMetrics {
@@ -176,21 +200,42 @@ func NewSinkMetrics(reg prometheus.Registerer, cfg SinkConfig) *SinkMetrics {
 		reg: reg,
 		totalNumUploaded: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_uploaded_total",
-			Help: "Total number of uploaded requests",
+			Help: "Number of uploaded requests",
 			ConstLabels: prometheus.Labels{
 				"sink": cfg.Address,
 			},
 		}),
-		totalUploadDelay: promauto.With(reg).NewCounter(prometheus.CounterOpts{
-			Name: "upload_proxy_sink_upload_delay_total",
-			Help: "Total upload delay in seconds",
+		totalNumDropped: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_dropped_total",
+			Help: "Number of dropped requests due to error, timeout or full queue",
 			ConstLabels: prometheus.Labels{
 				"sink": cfg.Address,
 			},
 		}),
-		queueLength: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "upload_proxy_sink_queue_length",
-			Help: "Number of entries in the sink queue",
+		totalQueueDelay: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_queue_delay_total",
+			Help: "Queue delay in seconds",
+			ConstLabels: prometheus.Labels{
+				"sink": cfg.Address,
+			},
+		}),
+		totalUploadDuration: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_upload_duration_total",
+			Help: "Upload duration in seconds",
+			ConstLabels: prometheus.Labels{
+				"sink": cfg.Address,
+			},
+		}),
+		totalBytesUploaded: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_bytes_uploaded_total",
+			Help: "Number of bytes uploaded",
+			ConstLabels: prometheus.Labels{
+				"sink": cfg.Address,
+			},
+		}),
+		totalTransientErrors: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "upload_proxy_sink_transient_errors_total",
+			Help: "Number of transient errors",
 			ConstLabels: prometheus.Labels{
 				"sink": cfg.Address,
 			},
@@ -200,6 +245,9 @@ func NewSinkMetrics(reg prometheus.Registerer, cfg SinkConfig) *SinkMetrics {
 
 func (m *SinkMetrics) deregister() {
 	m.reg.Unregister(m.totalNumUploaded)
-	m.reg.Unregister(m.totalUploadDelay)
-	m.reg.Unregister(m.queueLength)
+	m.reg.Unregister(m.totalNumDropped)
+	m.reg.Unregister(m.totalQueueDelay)
+	m.reg.Unregister(m.totalUploadDuration)
+	m.reg.Unregister(m.totalBytesUploaded)
+	m.reg.Unregister(m.totalTransientErrors)
 }
