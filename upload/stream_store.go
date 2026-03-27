@@ -117,7 +117,7 @@ func (s *StreamStore) UpdateStream(slug string, origin string) error {
 	stream, ok := s.data[slug]
 	if !ok {
 		s.log.Info().Str("slug", slug).Msg("registering stream")
-		stream = NewStream(s.config.StreamTimeout, s.config.StreamOriginDuration)
+		stream = NewStream(slug, s.config.StreamTimeout, s.config.StreamOriginDuration)
 		s.data[slug] = stream
 	}
 

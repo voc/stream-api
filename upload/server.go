@@ -137,7 +137,8 @@ func (s *Server) HandleUpload(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if req.Method == "PUT" || req.Method == "POST" {
+	switch req.Method {
+	case "PUT", "POST":
 		log.Debug().Str("method", req.Method).Str("path", req.URL.Path).Msg("upload")
 		err := s.handler.HandleFile(req.Body, slug, path)
 		if err != nil {
@@ -145,11 +146,11 @@ func (s *Server) HandleUpload(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-	} else if req.Method == "DELETE" {
+	case "DELETE":
 		// ignore delete requests
 		// path := filepath.Join(s.storePath, req.URL.Path)
 		// os.Remove(path)
-	} else {
+	default:
 		log.Debug().Str("method", req.Method).Str("path", req.URL.Path).Msg("unhandled")
 		w.WriteHeader(405)
 		_, _ = io.WriteString(w, "Method Not Allowed")

@@ -11,6 +11,7 @@ import (
 var errInvalidOrigin = errors.New("invalid origin - this stream is already being uploaded from a different location")
 
 type Stream struct {
+	slug          string
 	timeout       time.Duration
 	originTimeout time.Duration
 	ttl           time.Duration
@@ -27,8 +28,9 @@ type Stream struct {
 	parsers     map[ParserType]Parser
 }
 
-func NewStream(timeout time.Duration, originTimeout time.Duration) *Stream {
+func NewStream(slug string, timeout time.Duration, originTimeout time.Duration) *Stream {
 	return &Stream{
+		slug:          slug,
 		timeout:       timeout,
 		originTimeout: originTimeout,
 		ttl:           timeout, // initial timeout
@@ -47,7 +49,12 @@ func (s *Stream) Update(origin string) error {
 		if originDeadline.After(now) {
 			return errInvalidOrigin
 		}
-		log.Info().Str("old-origin", s.origin).Str("new-origin", origin).Bool("expired", originDeadline.After(now)).Msg("updating stream origin")
+		log.Info().
+			Str("stream", s.slug).
+			Str("old-origin", s.origin).
+			Str("new-origin", origin).
+			Bool("expired", originDeadline.After(now)).
+			Msg("updating stream origin")
 	}
 
 	s.origin = origin
