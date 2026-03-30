@@ -24,6 +24,7 @@ const MaxFileSize = 50 * 1024 * 1024 // 50 MB
 
 type Proxy struct {
 	sinks     []*Sink
+	sinkMutex sync.Mutex
 	errors    chan error
 	transport *http.Transport
 	ctx       context.Context
@@ -32,7 +33,7 @@ type Proxy struct {
 	metrics   *ProxyMetrics
 }
 
-func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
+func NewProxy(ctx context.Context, conf Config) (*Proxy, error) {
 	tr := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
@@ -44,27 +45,25 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	p := &Proxy{
-		sinks:     sinks,
-		transport: tr,
-		errors:    make(chan error, 1),
-		ctx:       ctx,
-	}
-
-	mux := http.NewServeMux()
-	srv := http.Server{Addr: addr, Handler: mux}
-
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
-	p.metrics = NewProxyMetrics(reg)
+	p := &Proxy{
+		transport: tr,
+		errors:    make(chan error, 1),
+		ctx:       ctx,
+		metrics:   NewProxyMetrics(reg),
+	}
+
+	mux := http.NewServeMux()
+	srv := http.Server{Addr: conf.ListenAddress, Handler: mux}
 
 	// set routes
 	mux.HandleFunc("/", p.HandleUpload)
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 
-	ln, err := net.Listen("tcp", addr)
+	ln, err := net.Listen("tcp", conf.ListenAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -91,22 +90,100 @@ func NewProxy(ctx context.Context, addr string, sinks []*Sink) (*Proxy, error) {
 		}
 	}()
 
-	// run sink uploaders
-	for _, sink := range p.sinks {
-		log.Printf("setup sink %+v\n", sink)
+	p.done.Add(1)
+	go p.runTimeout(ctx)
 
-		// if the number of workers is >1 the server would have to deal with out of order playlists
-		sink.Start(ctx, p.transport, reg, 1)
+	// initial config update
+	if err := p.UpdateConfig(ctx, conf); err != nil {
+		return nil, err
 	}
 
 	return p, nil
+}
+
+func (p *Proxy) UpdateConfig(ctx context.Context, conf Config) error {
+	p.sinkMutex.Lock()
+	defer p.sinkMutex.Unlock()
+	var newConfigs []SinkConfig
+	var err error
+	// mark removed sinks for graceful deletion
+	for _, s := range p.sinks {
+		var found bool
+		for _, sinkConfig := range conf.Sinks {
+			if s.Address() == sinkConfig.Address {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		s.StartGracePeriod()
+	}
+	// update existing sinks
+	for _, sinkConfig := range conf.Sinks {
+		var updated bool
+		for _, s := range p.sinks {
+			if s.Address() != sinkConfig.Address {
+				continue
+			}
+			// update existing sink
+			if err2 := s.UpdateConfig(ctx, sinkConfig); err2 != nil {
+				log.Error().Err(err2).Str("sink", s.url.Host).Msg("sink update failed")
+				firstErr(err2, &err)
+			}
+			updated = true
+			break
+		}
+		if updated {
+			continue
+		}
+		newConfigs = append(newConfigs, sinkConfig)
+	}
+	// create new sinks
+	for _, sinkConfig := range newConfigs {
+		sink, err2 := NewSink(ctx, sinkConfig, p.transport, p.metrics.reg)
+		if err2 != nil {
+			firstErr(err2, &err)
+			log.Error().Err(err2).Str("sink", sinkConfig.Address).Msg("sink init failed")
+			continue
+		}
+		p.sinks = append(p.sinks, sink)
+		log.Info().Str("sink", sink.url.Host).Str("basePath", sink.url.Path).Str("authType", string(sink.conf.AuthType)).Msg("added sink")
+	}
+	return err
+}
+
+func (p *Proxy) runTimeout(ctx context.Context) {
+	defer p.done.Done()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.sinkMutex.Lock()
+			sinks := p.sinks[:0]
+			for _, s := range p.sinks {
+				if s.IsStale() {
+					s.Stop()
+					log.Info().Str("sink", s.url.Host).Msg("removed sink after timeout")
+					continue
+				}
+				sinks = append(sinks, s)
+			}
+			p.sinks = sinks
+			p.sinkMutex.Unlock()
+		}
+	}
 }
 
 // Wait for server to finish
 func (p *Proxy) Wait() {
 	p.done.Wait()
 	for _, sink := range p.sinks {
-		sink.wait()
+		sink.Stop()
 	}
 	p.metrics.deregister()
 }
@@ -234,4 +311,10 @@ func NewProxyMetrics(reg prometheus.Registerer) *ProxyMetrics {
 func (m *ProxyMetrics) deregister() {
 	m.reg.Unregister(m.totalNumRead)
 	m.reg.Unregister(m.totalReadDelay)
+}
+
+func firstErr(err error, errPtr *error) {
+	if *errPtr == nil && err != nil {
+		*errPtr = err
+	}
 }

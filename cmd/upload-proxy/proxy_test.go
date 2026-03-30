@@ -23,14 +23,12 @@ func TestUpload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	sink, err := NewSink(SinkConfig{
-		Address: srv.URL + "/upload",
+	proxy, err := NewProxy(ctx, Config{
+		ListenAddress: "127.0.0.1:0",
+		Sinks: []SinkConfig{{
+			Address: srv.URL + "/upload",
+		}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	proxy, err := NewProxy(ctx, "127.0.0.1:0", []*Sink{sink})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,32 +11,26 @@ import (
 	"github.com/icholy/digest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-const DefaultQueueSize = 128
-
-type SinkConfig struct {
-	Address   string
-	Username  string
-	Password  string
-	AuthType  AuthType `toml:"auth-type"`
-	QueueSize int      `toml:"queue-size"`
-}
-
-type AuthType string
-
 const (
-	AuthTypeNone   AuthType = "none"
-	AuthTypeBasic  AuthType = "basic"
-	AuthTypeDigest AuthType = "digest"
+	DefaultQueueSize = 128
+	GracePeriod      = time.Minute * 5
 )
 
 type Sink struct {
-	conf  SinkConfig
-	url   url.URL
-	queue chan SinkEntry
-	done  sync.WaitGroup
+	log       zerolog.Logger
+	conf      SinkConfig
+	url       url.URL
+	transport *http.Transport
+	reg       prometheus.Registerer
+	queue     chan SinkEntry
+	done      sync.WaitGroup
+
+	graceDeadline time.Time
+	deadlineMutex sync.Mutex
 
 	cancel  context.CancelFunc
 	metrics *SinkMetrics
@@ -48,50 +42,93 @@ type SinkEntry struct {
 	Deadline time.Time
 }
 
-func NewSink(conf SinkConfig) (*Sink, error) {
-	if conf.QueueSize == 0 {
-		conf.QueueSize = DefaultQueueSize
-	}
-	if conf.Username != "" && (conf.AuthType != AuthTypeBasic && conf.AuthType != AuthTypeDigest) {
-		conf.AuthType = AuthTypeBasic
-	}
+func NewSink(ctx context.Context, conf SinkConfig, transport *http.Transport, reg prometheus.Registerer) (*Sink, error) {
 	url, err := url.Parse(conf.Address)
 	if err != nil {
 		return nil, fmt.Errorf("invalid sink address: %w", err)
 	}
-	return &Sink{
-		conf:  conf,
-		url:   *url,
-		queue: make(chan SinkEntry, conf.QueueSize),
-	}, nil
+	ctx, cancel := context.WithCancel(ctx)
+	s := &Sink{
+		log:       log.With().Str("sink", conf.Address).Logger(),
+		conf:      conf,
+		url:       *url,
+		reg:       reg,
+		transport: transport,
+		queue:     make(chan SinkEntry, conf.QueueSize),
+		cancel:    cancel,
+	}
+	s.Start(ctx)
+	return s, nil
 }
 
-func (sink *Sink) Start(ctx context.Context, transport *http.Transport, reg prometheus.Registerer, numWorkers int) {
+func (sink *Sink) Address() string {
+	return sink.conf.Address
+}
+
+func (sink *Sink) UpdateConfig(ctx context.Context, conf SinkConfig) error {
+	sink.deadlineMutex.Lock()
+	defer sink.deadlineMutex.Unlock()
+	sink.graceDeadline = time.Time{} // reset grace deadline on config update
+	if conf == sink.conf {
+		// noop
+		return nil
+	}
+	if conf.Address != sink.conf.Address {
+		return fmt.Errorf("cannot update sink address")
+	}
+	if conf.QueueSize != sink.conf.QueueSize {
+		return fmt.Errorf("cannot update sink queue size")
+	}
+	sink.Stop()
+	sink.conf = conf
+	sink.log.Info().Msg("sink config updated")
 	ctx, cancel := context.WithCancel(ctx)
 	sink.cancel = cancel
-	sink.metrics = NewSinkMetrics(reg, sink.conf)
+	sink.Start(ctx)
+	return nil
+}
 
-	cli := &http.Client{Transport: transport}
+func (sink *Sink) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	sink.cancel = cancel
+	sink.metrics = NewSinkMetrics(sink.reg, sink.conf.Address)
+
+	cli := &http.Client{Transport: sink.transport}
 	if sink.conf.AuthType == AuthTypeDigest {
 		cli = &http.Client{
 			Transport: &digest.Transport{
 				Username:  sink.conf.Username,
 				Password:  sink.conf.Password,
-				Transport: transport,
+				Transport: sink.transport,
 			},
 		}
 	}
 
-	sink.done.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
-		go sink.work(ctx, cli)
-	}
+	sink.done.Add(1)
+	go sink.work(ctx, cli)
+	sink.log.Info().Msg("sink started")
 }
 
 func (sink *Sink) Stop() {
 	sink.cancel()
 	sink.done.Wait()
 	sink.metrics.deregister()
+	sink.log.Info().Msg("sink stopped")
+}
+
+func (sink *Sink) StartGracePeriod() {
+	sink.deadlineMutex.Lock()
+	defer sink.deadlineMutex.Unlock()
+	sink.log.Warn().Msg("sink removed from config, starting grace period")
+	if sink.graceDeadline.IsZero() {
+		sink.graceDeadline = time.Now().Add(GracePeriod)
+	}
+}
+
+func (sink *Sink) IsStale() bool {
+	sink.deadlineMutex.Lock()
+	defer sink.deadlineMutex.Unlock()
+	return !sink.graceDeadline.IsZero() && time.Now().After(sink.graceDeadline)
 }
 
 func (sink *Sink) handle(req *http.Request, deadline time.Time) {
@@ -116,10 +153,6 @@ outer:
 			continue
 		}
 	}
-}
-
-func (sink *Sink) wait() {
-	sink.done.Wait()
 }
 
 func (sink *Sink) work(ctx context.Context, client *http.Client) {
@@ -195,49 +228,49 @@ type SinkMetrics struct {
 	totalTransientErrors prometheus.Counter
 }
 
-func NewSinkMetrics(reg prometheus.Registerer, cfg SinkConfig) *SinkMetrics {
+func NewSinkMetrics(reg prometheus.Registerer, address string) *SinkMetrics {
 	return &SinkMetrics{
 		reg: reg,
 		totalNumUploaded: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_uploaded_total",
 			Help: "Number of uploaded requests",
 			ConstLabels: prometheus.Labels{
-				"sink": cfg.Address,
+				"sink": address,
 			},
 		}),
 		totalNumDropped: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_dropped_total",
 			Help: "Number of dropped requests due to error, timeout or full queue",
 			ConstLabels: prometheus.Labels{
-				"sink": cfg.Address,
+				"sink": address,
 			},
 		}),
 		totalQueueDelay: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_queue_delay_total",
 			Help: "Queue delay in seconds",
 			ConstLabels: prometheus.Labels{
-				"sink": cfg.Address,
+				"sink": address,
 			},
 		}),
 		totalUploadDuration: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_upload_duration_total",
 			Help: "Upload duration in seconds",
 			ConstLabels: prometheus.Labels{
-				"sink": cfg.Address,
+				"sink": address,
 			},
 		}),
 		totalBytesUploaded: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_bytes_uploaded_total",
 			Help: "Number of bytes uploaded",
 			ConstLabels: prometheus.Labels{
-				"sink": cfg.Address,
+				"sink": address,
 			},
 		}),
 		totalTransientErrors: promauto.With(reg).NewCounter(prometheus.CounterOpts{
 			Name: "upload_proxy_sink_transient_errors_total",
 			Help: "Number of transient errors",
 			ConstLabels: prometheus.Labels{
-				"sink": cfg.Address,
+				"sink": address,
 			},
 		}),
 	}
