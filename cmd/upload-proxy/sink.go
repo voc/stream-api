@@ -81,7 +81,7 @@ func (sink *Sink) UpdateConfig(ctx context.Context, conf SinkConfig) error {
 	}
 	sink.Stop()
 	sink.conf = conf
-	sink.log.Info().Msg("sink config updated")
+	sink.log.Info().Str("authType", string(conf.AuthType)).Str("username", conf.Username).Msg("sink config updated")
 	ctx, cancel := context.WithCancel(ctx)
 	sink.cancel = cancel
 	sink.Start(ctx)
@@ -170,7 +170,7 @@ func (sink *Sink) work(ctx context.Context, client *http.Client) {
 func (sink *Sink) upload(ctx context.Context, entry SinkEntry, client *http.Client) {
 	for {
 		if entry.Deadline.Before(time.Now()) {
-			log.Warn().Str("sink", sink.url.Host).Msg("discarding timed out request")
+			log.Warn().Str("sink", sink.url.Host).Str("method", entry.Request.Method).Str("path", entry.Request.URL.Path).Msg("discarding timed out request")
 			sink.metrics.totalNumDropped.Inc()
 			return
 		}

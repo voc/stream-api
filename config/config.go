@@ -1,7 +1,7 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -71,7 +71,7 @@ func Parse(path string) (Config, error) {
 			Timeout:  time.Second * 15,
 		},
 	}
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, err
 	}

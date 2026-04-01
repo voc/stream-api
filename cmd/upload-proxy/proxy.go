@@ -149,7 +149,7 @@ func (p *Proxy) UpdateConfig(ctx context.Context, conf Config) error {
 			continue
 		}
 		p.sinks = append(p.sinks, sink)
-		log.Info().Str("sink", sink.url.Host).Str("basePath", sink.url.Path).Str("authType", string(sink.conf.AuthType)).Msg("added sink")
+		log.Info().Str("sink", sink.url.Host).Str("basePath", sink.url.Path).Str("authType", string(sink.conf.AuthType)).Str("username", sink.conf.Username).Msg("added sink")
 	}
 	return err
 }

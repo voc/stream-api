@@ -62,6 +62,9 @@ func (c *Config) Load(path string, authPath string) error {
 			return fmt.Errorf("unmarshal: %w", err)
 		}
 	}
+	if c.Auth.Username != "" && (c.Auth.AuthType != AuthTypeBasic && c.Auth.AuthType != AuthTypeDigest) {
+		c.Auth.AuthType = AuthTypeBasic
+	}
 	// apply auth config to all sinks if set
 	for i := range c.Sinks {
 		c.Sinks[i].ApplyDefaults()
