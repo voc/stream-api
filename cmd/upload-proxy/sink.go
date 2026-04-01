@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -140,11 +141,10 @@ func (sink *Sink) handle(req *http.Request, deadline time.Time) {
 	}
 	req.Response = nil
 	req.RequestURI = ""
-outer:
 	for {
 		select {
 		case sink.queue <- SinkEntry{Request: req, Deadline: deadline, QueuedAt: time.Now()}:
-			break outer
+			return
 		default:
 			// drop front of queue
 			<-sink.queue
@@ -178,6 +178,11 @@ func (sink *Sink) upload(ctx context.Context, entry SinkEntry, client *http.Clie
 		uploadStart := time.Now()
 		res, err := client.Do(entry.Request)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				log.Warn().Str("sink", sink.url.Host).Str("method", entry.Request.Method).Str("path", entry.Request.URL.Path).Msg("upload timed out")
+				sink.metrics.totalNumDropped.Inc()
+				return
+			}
 			log.Error().Str("sink", sink.url.Host).Err(err).Msg("sink error")
 			sink.metrics.totalNumDropped.Inc()
 			return
@@ -214,6 +219,12 @@ func (sink *Sink) upload(ctx context.Context, entry SinkEntry, client *http.Clie
 		sink.metrics.totalQueueDelay.Add(queuedFor.Seconds())
 		sink.metrics.totalUploadDuration.Add(time.Since(uploadStart).Seconds())
 		sink.metrics.totalBytesUploaded.Add(float64(entry.Request.ContentLength))
+		log.Debug().Str("sink", sink.url.Host).
+			Str("method", entry.Request.Method).
+			Str("path", entry.Request.URL.Path).
+			Str("status", res.Status).
+			Str("duration", time.Since(uploadStart).String()).
+			Msg("upload successful")
 		return
 	}
 }

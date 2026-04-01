@@ -39,7 +39,6 @@ func NewProxy(ctx context.Context, conf Config) (*Proxy, error) {
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
 		MaxIdleConnsPerHost:   32,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -261,12 +260,14 @@ func (p *Proxy) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	getBody := func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(b.Bytes())), nil
 	}
+	deadline := getDeadline(r.URL.Path)
+	ctx, _ := context.WithDeadline(p.ctx, deadline)
 	for _, sink := range p.sinks {
-		req := r.Clone(p.ctx)
+		req := r.Clone(ctx)
 		req.ContentLength = size
 		req.GetBody = getBody
 		req.Body, _ = getBody()
-		sink.handle(req, getDeadline(r.URL.Path))
+		sink.handle(req, deadline)
 	}
 	w.WriteHeader(200)
 }
