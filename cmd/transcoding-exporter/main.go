@@ -78,7 +78,7 @@ func run() error {
 	slog.Info("shutdown signal received")
 
 	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second*2)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
 	defer shutdownCancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("error during shutdown", "err", err)

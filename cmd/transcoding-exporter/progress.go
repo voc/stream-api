@@ -74,7 +74,11 @@ func (h *ProgressHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		key := parts[0]
-		value := parts[1]
+		value := strings.TrimSpace(parts[1])
+		if key == "speed" {
+			value = strings.TrimSuffix(value, "x")
+		}
+
 		floatVal, err := strconv.ParseFloat(value, 64)
 		if err != nil {
 			continue
@@ -117,6 +121,8 @@ func (h *ProgressHandler) updateMetrics(stream *activeStream, key string, value 
 	case "fps":
 		// Frames per second
 		h.metrics.SetFPS(stream.streamID, value)
+	case "speed":
+		h.metrics.SetSpeed(stream.streamID, value)
 	}
 }
 

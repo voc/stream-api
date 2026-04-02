@@ -16,6 +16,7 @@ type Metrics struct {
 	totalDuration         prometheus.CounterVec
 	currentBitrate        prometheus.GaugeVec
 	currentFPS            prometheus.GaugeVec
+	currentSpeed          prometheus.GaugeVec
 }
 
 // NewMetrics creates and registers all prometheus metrics
@@ -49,6 +50,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		currentFPS: *promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
 			Name: "transcoding_fps",
 			Help: "Current frames per second of active transcoding job",
+		}, []string{"stream_id"}),
+		currentSpeed: *promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
+			Name: "transcoding_speed_factor",
+			Help: "Current speed factor of active transcoding job (e.g. 1.0 = realtime, 2.0 = 2x faster)",
 		}, []string{"stream_id"}),
 	}
 	return m
@@ -86,6 +91,11 @@ func (m *Metrics) SetFPS(streamID string, fps float64) {
 	m.currentFPS.WithLabelValues(streamID).Set(fps)
 }
 
+// SetSpeed sets the current speed factor for a stream (e.g. 1.0 = realtime, 2.0 = 2x faster)
+func (m *Metrics) SetSpeed(streamID string, speed float64) {
+	m.currentSpeed.WithLabelValues(streamID).Set(speed)
+}
+
 // DeleteStream removes all label combinations for a stream (called on job end)
 func (m *Metrics) DeleteStream(streamID string) {
 	m.totalFrames.DeleteLabelValues(streamID)
@@ -95,4 +105,5 @@ func (m *Metrics) DeleteStream(streamID string) {
 	m.totalDuration.DeleteLabelValues(streamID)
 	m.currentBitrate.DeleteLabelValues(streamID)
 	m.currentFPS.DeleteLabelValues(streamID)
+	m.currentSpeed.DeleteLabelValues(streamID)
 }
