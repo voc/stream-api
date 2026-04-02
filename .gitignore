@@ -5,3 +5,4 @@ default.etcd/
 /stream-api
 /upload-proxy
 /upload-server
+/transcoding-exporter
