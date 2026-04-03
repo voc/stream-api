@@ -125,27 +125,26 @@ func (h *HLSParser) processVariant(path string, playlist *m3u8.Playlist) (*m3u8.
 // Generate separate master playlist for every non-default language variant
 func (h *HLSParser) generateLanguageMasters(path string, suffix string, playlist *m3u8.Playlist) error {
 	dir := filepath.Dir(path)
-	lang := getAlternativeLanguages(playlist)
+	lang := getLanguages(playlist)
 
 	for _, lang := range lang {
-		var prev *m3u8.MediaItem
+		name := fmt.Sprintf("%s_%s.m3u8", strings.ToLower(lang), suffix)
+		if name == "native_hd.m3u8" {
+			continue
+		}
+
 		for _, item := range playlist.Items {
 			media, ok := item.(*m3u8.MediaItem)
 			if !ok || media.Default == nil || media.Language == nil {
 				continue
 			}
-			if *media.Default {
-				prev = media
-			}
 			if *media.Language == lang {
 				media.Default = &[]bool{true}[0]
+			} else {
+				media.Default = &[]bool{false}[0]
 			}
 		}
-		if prev == nil {
-			continue
-		}
-		prev.Default = &[]bool{false}[0]
-		name := fmt.Sprintf("%s_%s.m3u8", strings.ToLower(lang), suffix)
+
 		if err := h.writePlaylist(filepath.Join(dir, name), playlist); err != nil {
 			return err
 		}
@@ -284,17 +283,15 @@ func (h *HLSParser) writePlaylist(path string, playlist *m3u8.Playlist) error {
 	return nil
 }
 
-// get non-default languages from playlist
-func getAlternativeLanguages(playlist *m3u8.Playlist) []string {
+// get all languages from playlist
+func getLanguages(playlist *m3u8.Playlist) []string {
 	var languages []string
 	for _, item := range playlist.Items {
 		media, ok := item.(*m3u8.MediaItem)
 		if !ok || media.Default == nil || media.Language == nil {
 			continue
 		}
-		if !*media.Default {
-			languages = append(languages, *media.Language)
-		}
+		languages = append(languages, *media.Language)
 	}
 	return languages
 }

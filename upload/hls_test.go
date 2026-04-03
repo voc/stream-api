@@ -61,16 +61,16 @@ func expectPlaylistFile(t *testing.T, playlist *m3u8.Playlist, path string, msg 
 	expectPlaylist(t, playlist, expected, msg)
 }
 
-func Test_getAlternativeLanguages(t *testing.T) {
+func Test_getLanguages(t *testing.T) {
 	playlist := readPlaylist(t, "fixtures/native_hd.m3u8")
 	if !playlist.IsMaster() {
 		t.Error("playlist is not master")
 	}
 
-	expected := []string{"Translated", "Translated-2"}
-	langs := getAlternativeLanguages(playlist)
+	expected := []string{"Native", "Translated", "Translated-2"}
+	langs := getLanguages(playlist)
 	if !reflect.DeepEqual(expected, langs) {
-		t.Errorf("getAlternativeLanguages() = %v, want %v", langs, expected)
+		t.Errorf("getLanguages() = %v, want %v", langs, expected)
 	}
 }
 
