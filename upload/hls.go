@@ -7,9 +7,19 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/quangngotan95/go-m3u8/m3u8"
 	"github.com/rs/zerolog/log"
 )
+
+type HLSConfiguration struct {
+	Slug           string
+	BasePath       string
+	PlaylistConfig PlaylistConfig
+	Writer         FileWriter
+	Registry       *FileRegistry
+	Registerer     prometheus.Registerer
+}
 
 type HLSParser struct {
 	mutex          sync.Mutex
@@ -18,16 +28,9 @@ type HLSParser struct {
 	playlistConfig PlaylistConfig
 	writer         FileWriter
 	registry       *FileRegistry
+	metrics        *HLSMetrics
 	subs           map[string]*VariantPlaylist // tracked playlists
 	files          map[string]chan struct{}    // tracked files
-}
-
-type HLSConfiguration struct {
-	slug           string
-	basePath       string
-	playlistConfig PlaylistConfig
-	writer         FileWriter
-	registry       *FileRegistry
 }
 
 type PlaylistConfig struct {
@@ -36,22 +39,25 @@ type PlaylistConfig struct {
 
 // Tracks a certain source playlist and produces a continuous output playlist
 type VariantPlaylist struct {
+	name         string
 	lastIndex    int
 	lastSize     int
 	lastSequence int
 	output       *LivePlaylist
 }
 
-func newHLSParser(config HLSConfiguration) *HLSParser {
+func NewHLSParser(config HLSConfiguration) *HLSParser {
 	h := &HLSParser{
-		slug:           config.slug,
-		basePath:       config.basePath,
-		playlistConfig: config.playlistConfig,
-		writer:         config.writer,
-		registry:       config.registry,
+		slug:           config.Slug,
+		basePath:       config.BasePath,
+		playlistConfig: config.PlaylistConfig,
+		writer:         config.Writer,
+		registry:       config.Registry,
+		metrics:        NewHLSMetrics(config.Slug, config.Registerer),
 		subs:           make(map[string]*VariantPlaylist),
 		files:          make(map[string]chan struct{}),
 	}
+
 	return h
 }
 
@@ -60,6 +66,7 @@ func (h *HLSParser) Cleanup() {
 		close(keep)
 	}
 	h.files = nil
+	h.metrics.Unregister()
 }
 
 /*
@@ -115,6 +122,8 @@ func (h *HLSParser) processVariant(path string, playlist *m3u8.Playlist) (*m3u8.
 	if err != nil {
 		return nil, err
 	}
+	// Store targetDuration for metrics
+	h.metrics.RecordTargetDuration(playlist.Target, filepath.Base(path))
 	h.checkDiscontinuity(v, playlist, path)
 	h.appendItems(v, playlist)
 	v.output.setSegmentTarget(playlist.Target)
@@ -197,6 +206,7 @@ func (h *HLSParser) getVariantPlaylist(path string) (*VariantPlaylist, error) {
 	sub, ok := h.subs[name]
 	if !ok {
 		sub = &VariantPlaylist{
+			name:   name,
 			output: newLivePlaylist(h.playlistConfig.Size),
 		}
 		h.subs[name] = sub
@@ -232,24 +242,20 @@ func (h *HLSParser) checkDiscontinuity(v *VariantPlaylist, source *m3u8.Playlist
 
 // append new items from source playlist
 func (h *HLSParser) appendItems(v *VariantPlaylist, source *m3u8.Playlist) {
-	index := 0
-	for _, item := range source.Items {
+	for index, item := range source.Items {
 		segment, ok := item.(*m3u8.SegmentItem)
-		if !ok {
+		if !ok || index < v.lastIndex {
 			continue
 		}
-
-		if index >= v.lastIndex {
-			h.keepFile(segment.Segment)
-			res := v.output.append(segment)
-			switch deleted := res.(type) {
-			case *m3u8.SegmentItem:
-				h.expireFile(deleted.Segment)
-			}
+		h.metrics.RecordSegmentDuration(v.name, segment.Duration)
+		h.keepFile(segment.Segment)
+		res := v.output.append(segment)
+		switch deleted := res.(type) {
+		case *m3u8.SegmentItem:
+			h.expireFile(deleted.Segment)
 		}
-		index++
 	}
-	v.lastIndex = index
+	v.lastIndex = len(source.Items)
 }
 
 // keep segment alive

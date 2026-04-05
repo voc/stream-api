@@ -57,7 +57,7 @@ func (w AtomicWriter) WriteFile(path string, data []byte) (err error) {
 	// if an error occured make sure that our temporary file is removed
 	defer func() {
 		if err != nil {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
@@ -77,7 +77,7 @@ func (w AtomicWriter) CopyFile(path string, src io.Reader) (err error) {
 	// if an error occured make sure that our temporary file is removed
 	defer func() {
 		if err != nil {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath)
 		}
 	}()
 

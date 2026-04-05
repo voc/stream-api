@@ -83,7 +83,7 @@ func (s *Stream) GetHLSParser(config HLSConfiguration) Parser {
 	s.parserMutex.Lock()
 	defer s.parserMutex.Unlock()
 	if s.parsers[ParserTypeHLS] == nil {
-		s.parsers[ParserTypeHLS] = newHLSParser(config)
+		s.parsers[ParserTypeHLS] = NewHLSParser(config)
 	}
 	return s.parsers[ParserTypeHLS]
 }

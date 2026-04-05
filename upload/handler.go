@@ -5,6 +5,8 @@ import (
 	"io"
 	"path/filepath"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Handler tracks the lifetime of uploaded streams and stream segments
@@ -13,8 +15,8 @@ type Handler struct {
 	registry *FileRegistry
 	store    *StreamStore
 
-	playlistConfig PlaylistConfig
-
+	playlistConfig  PlaylistConfig
+	registerer      prometheus.Registerer
 	maxPlaylistSize int
 	maxSegmentSize  int
 }
@@ -28,6 +30,7 @@ func NewHandler(config ServerConfig) *Handler {
 		playlistConfig: PlaylistConfig{
 			Size: config.PlaylistSize,
 		},
+		registerer:      config.Registerer,
 		maxPlaylistSize: config.MaxPlaylistSize,
 		maxSegmentSize:  config.MaxSegmentSize,
 	}
@@ -61,11 +64,12 @@ func (h *Handler) HandleFile(input io.Reader, slug string, outputPath string) er
 	switch filepath.Ext(outputPath) {
 	case ".m3u8":
 		hls := stream.GetHLSParser(HLSConfiguration{
-			slug:           slug,
-			basePath:       dir,
-			writer:         AtomicWriter{},
-			registry:       h.registry,
-			playlistConfig: h.playlistConfig,
+			Slug:           slug,
+			BasePath:       dir,
+			Writer:         AtomicWriter{},
+			Registry:       h.registry,
+			PlaylistConfig: h.playlistConfig,
+			Registerer:     h.registerer,
 		})
 		src := LimitReads(input, int64(h.maxPlaylistSize))
 		err = hls.ParsePlaylist(outputPath, src)

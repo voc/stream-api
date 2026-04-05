@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,6 +35,8 @@ type ServerConfig struct {
 	StreamOriginDuration time.Duration
 
 	PlaylistSize int
+
+	Registerer prometheus.Registerer
 }
 
 type Server struct {
@@ -45,7 +48,7 @@ type Server struct {
 	done       sync.WaitGroup
 }
 
-func NewServer(auth Auth, config ServerConfig) *Server {
+func NewServer(auth Auth, config ServerConfig) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
 		handler:    NewHandler(config),
@@ -55,17 +58,21 @@ func NewServer(auth Auth, config ServerConfig) *Server {
 		cancel:     cancel,
 	}
 	mux := http.NewServeMux()
-	srv := http.Server{Addr: config.Addr, Handler: mux}
-
-	// set routes
 	mux.HandleFunc("/", s.HandleUpload)
 	mux.HandleFunc("/health", s.HandleHealth)
 
-	// run server
+	listener, err := net.Listen("tcp", config.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	log.Info().Str("addr", config.Addr).Msg("server listening")
+
+	srv := http.Server{Handler: mux}
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()
-		err := srv.ListenAndServe()
+		err := srv.Serve(listener)
 		if !errors.Is(err, http.ErrServerClosed) {
 			s.errors <- err
 		}
@@ -81,7 +88,7 @@ func NewServer(auth Auth, config ServerConfig) *Server {
 			log.Error().Err(err).Msg("close")
 		}
 	}()
-	return s
+	return s, nil
 }
 
 // Wait for server to finish cleaning up

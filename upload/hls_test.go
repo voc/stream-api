@@ -111,14 +111,14 @@ func Test_playlistAppend(t *testing.T) {
 
 // If the sequence went backward a discontinuity should be inserted
 func Test_VariantSequenceRollback(t *testing.T) {
-	h := newHLSParser(HLSConfiguration{
-		slug:     "foo",
-		basePath: "/foo",
-		playlistConfig: PlaylistConfig{
+	h := NewHLSParser(HLSConfiguration{
+		Slug:     "foo",
+		BasePath: "/foo",
+		PlaylistConfig: PlaylistConfig{
 			Size: 3,
 		},
-		writer:   nil,
-		registry: NewFileRegistry(FileRegistryConfig{ExpireInterval: time.Second, KeepDelay: time.Second}),
+		Writer:   nil,
+		Registry: NewFileRegistry(FileRegistryConfig{ExpireInterval: time.Second, KeepDelay: time.Second}),
 	})
 	one, err := h.processVariant("/foo/foo.m3u8", parsePlaylist(t, `#EXTM3U
 #EXT-X-VERSION:3
@@ -169,14 +169,14 @@ segment_Native2.ts
 
 // If the playlist suddenly got shorter but the sequence is the same we still reset the playlist
 func Test_VariantSequenceShorterPlaylist(t *testing.T) {
-	h := newHLSParser(HLSConfiguration{
-		slug:     "foo",
-		basePath: "/foo",
-		playlistConfig: PlaylistConfig{
+	h := NewHLSParser(HLSConfiguration{
+		Slug:     "foo",
+		BasePath: "/foo",
+		PlaylistConfig: PlaylistConfig{
 			Size: 3,
 		},
-		writer:   nil,
-		registry: NewFileRegistry(FileRegistryConfig{ExpireInterval: time.Second, KeepDelay: time.Second}),
+		Writer:   nil,
+		Registry: NewFileRegistry(FileRegistryConfig{ExpireInterval: time.Second, KeepDelay: time.Second}),
 	})
 	one, err := h.processVariant("/foo/foo.m3u8", parsePlaylist(t, `#EXTM3U
 #EXT-X-VERSION:3
